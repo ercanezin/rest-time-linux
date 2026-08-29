@@ -71,7 +71,7 @@ sudo pacman -S --needed base-devel rustup gtk4 gtk4-layer-shell cairo dbus pipew
 
 ```bash
 # Clone the repository
-git clone https://github.com/local/rest-time-linux.git
+git clone https://github.com/ercanezin/rest-time-linux.git
 cd rest-time-linux
 
 # Build release binary

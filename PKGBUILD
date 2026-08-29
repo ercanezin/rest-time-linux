@@ -4,7 +4,7 @@ pkgver=1.0.0
 pkgrel=1
 pkgdesc="Enterprise native break and micro-pause daemon for Arch Linux/CachyOS"
 arch=('x86_64')
-url="https://github.com/local/rest-time-linux"
+url="https://github.com/ercanezin/rest-time-linux"
 license=('MIT' 'Apache-2.0')
 depends=(
     'gtk4'

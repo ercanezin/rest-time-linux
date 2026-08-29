@@ -1,6 +1,6 @@
 [Unit]
 Description=Rest Time Linux Native Ergonomic Daemon
-Documentation=https://github.com/local/rest-time-linux
+Documentation=https://github.com/ercanezin/rest-time-linux
 PartOf=graphical-session.target
 After=graphical-session.target
 

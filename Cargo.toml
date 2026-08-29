@@ -6,7 +6,7 @@ authors = ["Autonomous Engineer"]
 description = "High-precision ergonomic break and micro-pause daemon for Linux/CachyOS"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/local/rest-time-linux"
+repository = "https://github.com/ercanezin/rest-time-linux"
 
 [lib]
 name = "rest_time_linux"
