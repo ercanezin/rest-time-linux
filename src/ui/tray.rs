@@ -1,13 +1,16 @@
-use ksni::{Category, MenuItem, Status, ToolTip, Tray};
+use ksni::{Category, Icon, MenuItem, Status, ToolTip, Tray};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use crate::engine::types::Event;
+use crate::ui::icon_renderer::render_timer_icon;
 
 pub struct RestTimeTray {
     pub display_text: String,
     pub tooltip_text: String,
+    pub work_duration_mins: u32,
+    pub break_duration_mins: u32,
     pub is_snoozed: Arc<AtomicBool>,
     pub is_in_break: Arc<AtomicBool>,
     pub tx: mpsc::Sender<Event>,
@@ -40,6 +43,12 @@ impl Tray for RestTimeTray {
         }
     }
 
+    fn icon_pixmap(&self) -> Vec<Icon> {
+        let is_break = self.is_in_break.load(Ordering::Relaxed);
+        let is_paused = self.is_snoozed.load(Ordering::Relaxed);
+        vec![render_timer_icon(&self.display_text, is_break, is_paused)]
+    }
+
     fn tool_tip(&self) -> ToolTip {
         ToolTip {
             icon_name: "rest-time-active".into(),
@@ -57,10 +66,7 @@ impl Tray for RestTimeTray {
             MenuItem::Standard(ksni::menu::StandardItem {
                 label: label.into(),
                 activate: Box::new(move |_| {
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let _ = tx.send(Event::SetWorkDuration(mins)).await;
-                    });
+                    let _ = tx.try_send(Event::SetWorkDuration(mins));
                 }),
                 ..Default::default()
             })
@@ -71,10 +77,7 @@ impl Tray for RestTimeTray {
             MenuItem::Standard(ksni::menu::StandardItem {
                 label: label.into(),
                 activate: Box::new(move |_| {
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let _ = tx.send(Event::SetBreakDuration(mins)).await;
-                    });
+                    let _ = tx.try_send(Event::SetBreakDuration(mins));
                 }),
                 ..Default::default()
             })
@@ -85,10 +88,7 @@ impl Tray for RestTimeTray {
             MenuItem::Standard(ksni::menu::StandardItem {
                 label: label.into(),
                 activate: Box::new(move |_| {
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let _ = tx.send(Event::Snooze(Duration::from_secs(secs))).await;
-                    });
+                    let _ = tx.try_send(Event::Snooze(Duration::from_secs(secs)));
                 }),
                 ..Default::default()
             })
@@ -103,14 +103,21 @@ impl Tray for RestTimeTray {
                 enabled: false,
                 ..Default::default()
             }),
+            MenuItem::Standard(ksni::menu::StandardItem {
+                label: format!("Work Duration: {} Min", self.work_duration_mins),
+                enabled: false,
+                ..Default::default()
+            }),
+            MenuItem::Standard(ksni::menu::StandardItem {
+                label: format!("Break Duration: {} Min", self.break_duration_mins),
+                enabled: false,
+                ..Default::default()
+            }),
             MenuItem::Separator,
             MenuItem::Standard(ksni::menu::StandardItem {
                 label: "▶ Take Break Now".into(),
                 activate: Box::new(move |_| {
-                    let tx = tx_break.clone();
-                    tokio::spawn(async move {
-                        let _ = tx.send(Event::TriggerForcedBreak).await;
-                    });
+                    let _ = tx_break.try_send(Event::TriggerForcedBreak);
                 }),
                 ..Default::default()
             }),
@@ -173,10 +180,7 @@ impl Tray for RestTimeTray {
                         MenuItem::Standard(ksni::menu::StandardItem {
                             label: "Indefinitely (Until I Resume)".into(),
                             activate: Box::new(move |_| {
-                                let tx = tx.clone();
-                                tokio::spawn(async move {
-                                    let _ = tx.send(Event::ToggleManualPause).await;
-                                });
+                                let _ = tx.try_send(Event::ToggleManualPause);
                             }),
                             ..Default::default()
                         })
@@ -188,10 +192,7 @@ impl Tray for RestTimeTray {
             MenuItem::Standard(ksni::menu::StandardItem {
                 label: if is_paused { "▶ Resume Timer".into() } else { "⏸ Pause Monitoring".into() },
                 activate: Box::new(move |_| {
-                    let tx = tx_toggle.clone();
-                    tokio::spawn(async move {
-                        let _ = tx.send(Event::ToggleManualPause).await;
-                    });
+                    let _ = tx_toggle.try_send(Event::ToggleManualPause);
                 }),
                 ..Default::default()
             }),
