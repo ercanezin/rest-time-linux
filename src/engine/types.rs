@@ -1,11 +1,4 @@
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BreakKind {
-    Micro,
-    Macro,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
@@ -19,11 +12,9 @@ pub enum State {
         target_break: Duration,
     },
     BreakWarning {
-        kind: BreakKind,
         seconds_remaining: u32,
     },
     InBreak {
-        kind: BreakKind,
         elapsed: Duration,
         total: Duration,
     },
@@ -38,7 +29,7 @@ pub enum Event {
     Tick(Duration),
     ActivityDetected,
     IdleThresholdTriggered,
-    TriggerForcedBreak(BreakKind),
+    TriggerForcedBreak,
     PostponeBreak(Duration),
     Snooze(Duration),
     CancelSnooze,
@@ -46,17 +37,16 @@ pub enum Event {
     CompleteBreak,
     ToggleManualPause,
     SetWorkDuration(u32),
-    SetMicroBreakDuration(u32),
-    SetMacroBreakDuration(u32),
+    SetBreakDuration(u32),
     SystemSuspend,
     SystemResume,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiEffect {
-    NotifyPreBreak { minutes_left: u32, kind: BreakKind },
-    TriggerFinalWarning(BreakKind),
-    MountOverlay { kind: BreakKind, total_duration: Duration },
+    NotifyPreBreak { minutes_left: u32 },
+    TriggerFinalWarning,
+    MountOverlay { total_duration: Duration },
     UpdateOverlayProgress { remaining_secs: u32 },
     DismissOverlay,
     BreakComplete,

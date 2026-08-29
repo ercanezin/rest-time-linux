@@ -16,9 +16,7 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IntervalSettings {
     pub work_duration_mins: u32,
-    pub micro_break_seconds: u32,
-    pub macro_break_mins: u32,
-    pub micro_breaks_before_macro: u32,
+    pub break_duration_mins: u32,
     pub idle_threshold_seconds: u32,
 }
 
@@ -58,9 +56,7 @@ impl Default for Config {
         Self {
             intervals: IntervalSettings {
                 work_duration_mins: 25,
-                micro_break_seconds: 30,
-                macro_break_mins: 5,
-                micro_breaks_before_macro: 3,
+                break_duration_mins: 5,
                 idle_threshold_seconds: 180,
             },
             notifications: NotificationSettings {

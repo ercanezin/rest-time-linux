@@ -1,12 +1,11 @@
 use std::time::{Duration, Instant};
 use crate::config::Config;
-use crate::engine::types::{BreakKind, Event, State, UiEffect};
+use crate::engine::types::{Event, State, UiEffect};
 use tracing::{debug, info};
 
 pub struct FsmEngine {
     pub state: State,
     pub config: Config,
-    pub completed_micro_breaks: u32,
     pub sent_warnings: Vec<u32>,
 }
 
@@ -19,30 +18,17 @@ impl FsmEngine {
                 total,
             },
             config,
-            completed_micro_breaks: 0,
             sent_warnings: Vec::new(),
         }
     }
 
-    pub fn next_break_kind(&self) -> BreakKind {
-        if self.completed_micro_breaks >= self.config.intervals.micro_breaks_before_macro {
-            BreakKind::Macro
-        } else {
-            BreakKind::Micro
-        }
-    }
-
-    pub fn target_break_duration(&self, kind: BreakKind) -> Duration {
-        match kind {
-            BreakKind::Micro => Duration::from_secs(self.config.intervals.micro_break_seconds as u64),
-            BreakKind::Macro => Duration::from_secs((self.config.intervals.macro_break_mins * 60) as u64),
-        }
+    pub fn target_break_duration(&self) -> Duration {
+        Duration::from_secs((self.config.intervals.break_duration_mins * 60) as u64)
     }
 
     pub fn transition(&mut self, event: Event) -> Option<UiEffect> {
         let mut effect = None;
-        let next_kind = self.next_break_kind();
-        let target_break = self.target_break_duration(next_kind);
+        let target_break = self.target_break_duration();
 
         match (&mut self.state, event) {
             (State::Working { elapsed, total }, Event::Tick(delta)) => {
@@ -57,7 +43,6 @@ impl FsmEngine {
                             self.sent_warnings.push(*warn_min);
                             effect = Some(UiEffect::NotifyPreBreak {
                                 minutes_left: *warn_min,
-                                kind: next_kind,
                             });
                         }
                     }
@@ -67,10 +52,9 @@ impl FsmEngine {
                 if *elapsed >= *total {
                     self.sent_warnings.clear();
                     self.state = State::BreakWarning {
-                        kind: next_kind,
                         seconds_remaining: self.config.notifications.final_warning_seconds,
                     };
-                    effect = Some(UiEffect::TriggerFinalWarning(next_kind));
+                    effect = Some(UiEffect::TriggerFinalWarning);
                 }
             }
 
@@ -88,12 +72,7 @@ impl FsmEngine {
             (State::IdleMeasuring { idle_elapsed, target_break, .. }, Event::Tick(delta)) => {
                 *idle_elapsed += delta;
                 if self.config.behavior.auto_credit_informal_breaks && *idle_elapsed >= *target_break {
-                    info!("Informal break satisfied automatically. Resetting cycle.");
-                    if self.completed_micro_breaks >= self.config.intervals.micro_breaks_before_macro {
-                        self.completed_micro_breaks = 0;
-                    } else {
-                        self.completed_micro_breaks += 1;
-                    }
+                    info!("Informal break satisfied automatically. Resetting work session.");
                     let total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
                     self.state = State::Working {
                         elapsed: Duration::ZERO,
@@ -104,7 +83,7 @@ impl FsmEngine {
             }
 
             (State::IdleMeasuring { work_elapsed, .. }, Event::ActivityDetected) => {
-                info!("User returned before break threshold met. Resuming working state.");
+                info!("User returned before break duration met. Resuming working session.");
                 let total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
                 self.state = State::Working {
                     elapsed: *work_elapsed,
@@ -112,21 +91,15 @@ impl FsmEngine {
                 };
             }
 
-            (State::BreakWarning { kind, seconds_remaining }, Event::Tick(delta)) => {
+            (State::BreakWarning { seconds_remaining }, Event::Tick(delta)) => {
                 let delta_secs = delta.as_secs() as u32;
                 if *seconds_remaining <= delta_secs {
-                    let k = *kind;
-                    let duration = match k {
-                        BreakKind::Micro => Duration::from_secs(self.config.intervals.micro_break_seconds as u64),
-                        BreakKind::Macro => Duration::from_secs((self.config.intervals.macro_break_mins * 60) as u64),
-                    };
+                    let duration = self.target_break_duration();
                     self.state = State::InBreak {
-                        kind: k,
                         elapsed: Duration::ZERO,
                         total: duration,
                     };
                     effect = Some(UiEffect::MountOverlay {
-                        kind: k,
                         total_duration: duration,
                     });
                 } else {
@@ -144,15 +117,9 @@ impl FsmEngine {
                 effect = Some(UiEffect::DismissOverlay);
             }
 
-            (State::InBreak { kind, elapsed, total }, Event::Tick(delta)) => {
+            (State::InBreak { elapsed, total }, Event::Tick(delta)) => {
                 *elapsed += delta;
                 if *elapsed >= *total {
-                    let finished_kind = *kind;
-                    if finished_kind == BreakKind::Macro {
-                        self.completed_micro_breaks = 0;
-                    } else {
-                        self.completed_micro_breaks += 1;
-                    }
                     let work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
                     self.state = State::Working {
                         elapsed: Duration::ZERO,
@@ -166,12 +133,7 @@ impl FsmEngine {
                 }
             }
 
-            (State::InBreak { kind, .. }, Event::SkipBreak) => {
-                if *kind == BreakKind::Macro {
-                    self.completed_micro_breaks = 0;
-                } else {
-                    self.completed_micro_breaks += 1;
-                }
+            (State::InBreak { .. }, Event::SkipBreak) => {
                 let work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
                 self.state = State::Working {
                     elapsed: Duration::ZERO,
@@ -180,12 +142,7 @@ impl FsmEngine {
                 effect = Some(UiEffect::DismissOverlay);
             }
 
-            (State::InBreak { kind, .. }, Event::CompleteBreak) => {
-                if *kind == BreakKind::Macro {
-                    self.completed_micro_breaks = 0;
-                } else {
-                    self.completed_micro_breaks += 1;
-                }
+            (State::InBreak { .. }, Event::CompleteBreak) => {
                 let work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
                 self.state = State::Working {
                     elapsed: Duration::ZERO,
@@ -194,20 +151,15 @@ impl FsmEngine {
                 effect = Some(UiEffect::BreakComplete);
             }
 
-            (_, Event::TriggerForcedBreak(kind)) => {
-                info!("Manual break triggered: {:?}", kind);
-                let duration = match kind {
-                    BreakKind::Micro => Duration::from_secs(self.config.intervals.micro_break_seconds as u64),
-                    BreakKind::Macro => Duration::from_secs((self.config.intervals.macro_break_mins * 60) as u64),
-                };
+            (_, Event::TriggerForcedBreak) => {
+                info!("Manual break triggered");
+                let duration = self.target_break_duration();
                 self.sent_warnings.clear();
                 self.state = State::InBreak {
-                    kind,
                     elapsed: Duration::ZERO,
                     total: duration,
                 };
                 effect = Some(UiEffect::MountOverlay {
-                    kind,
                     total_duration: duration,
                 });
             }
@@ -226,16 +178,17 @@ impl FsmEngine {
                 }
             }
 
-            (_, Event::SetMicroBreakDuration(secs)) => {
-                info!("Updating micro-break duration to {} secs", secs);
-                self.config.intervals.micro_break_seconds = secs;
+            (_, Event::SetBreakDuration(mins)) => {
+                info!("Updating break duration to {} mins", mins);
+                self.config.intervals.break_duration_mins = mins;
                 let _ = self.config.save();
-            }
-
-            (_, Event::SetMacroBreakDuration(mins)) => {
-                info!("Updating macro-break duration to {} mins", mins);
-                self.config.intervals.macro_break_mins = mins;
-                let _ = self.config.save();
+                let new_break_total = Duration::from_secs((mins * 60) as u64);
+                if let State::InBreak { elapsed, total } = &mut self.state {
+                    *total = new_break_total;
+                    if *elapsed > *total {
+                        *elapsed = *total;
+                    }
+                }
             }
 
             // 6. Snooze Handling (5m up to 48h / indefinitely)
@@ -297,3 +250,4 @@ impl FsmEngine {
         effect
     }
 }
+

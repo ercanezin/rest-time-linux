@@ -5,7 +5,6 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use crate::config::Config;
-use crate::engine::types::BreakKind;
 
 pub struct BreakOverlayManager {
     windows: Rc<RefCell<Vec<Window>>>,
@@ -31,13 +30,13 @@ impl BreakOverlayManager {
                 background-color: {};
             }}
             .time-display {{
-                font-size: 72px;
+                font-size: 80px;
                 font-weight: 800;
                 color: {};
                 font-family: 'JetBrains Mono', 'Fira Code', monospace;
             }}
             .prompt-display {{
-                font-size: 22px;
+                font-size: 24px;
                 font-weight: 500;
                 color: {};
                 margin-top: 16px;
@@ -59,7 +58,7 @@ impl BreakOverlayManager {
         }
     }
 
-    pub fn spawn_overlays(&self, kind: BreakKind, duration: Duration, on_unlock: impl Fn() + 'static + Clone) {
+    pub fn spawn_overlays(&self, duration: Duration, on_unlock: impl Fn() + 'static + Clone) {
         self.dismiss();
 
         let display = match gtk4::gdk::Display::default() {
@@ -70,10 +69,7 @@ impl BreakOverlayManager {
         let monitors = display.monitors();
         let mut active_wins = Vec::new();
 
-        let prompt = match kind {
-            BreakKind::Micro => "Rest your eyes. Look 20 feet away into the distance.",
-            BreakKind::Macro => "Step away from your desk. Stretch and hydrate.",
-        };
+        let prompt = "Time for a break. Step away from your desk, stretch, and relax.";
 
         let layer_shell_supported = gtk4_layer_shell::is_supported();
         let n_monitors = monitors.n_items().max(1);

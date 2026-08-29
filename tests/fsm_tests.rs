@@ -1,14 +1,12 @@
 use std::time::Duration;
 use rest_time_linux::config::Config;
 use rest_time_linux::engine::fsm::FsmEngine;
-use rest_time_linux::engine::types::{BreakKind, Event, State, UiEffect};
+use rest_time_linux::engine::types::{Event, State, UiEffect};
 
 fn test_config() -> Config {
     let mut cfg = Config::default();
     cfg.intervals.work_duration_mins = 25;
-    cfg.intervals.micro_break_seconds = 20;
-    cfg.intervals.macro_break_mins = 5;
-    cfg.intervals.micro_breaks_before_macro = 2;
+    cfg.intervals.break_duration_mins = 5;
     cfg.intervals.idle_threshold_seconds = 180;
     cfg.notifications.enable_progressive_warnings = true;
     cfg.notifications.warning_minutes = vec![10, 5, 3];
@@ -28,7 +26,6 @@ fn test_fsm_initial_state() {
         }
         _ => panic!("Expected State::Working"),
     }
-    assert_eq!(fsm.completed_micro_breaks, 0);
 }
 
 #[test]
@@ -42,7 +39,6 @@ fn test_fsm_progressive_warnings() {
         effect,
         Some(UiEffect::NotifyPreBreak {
             minutes_left: 10,
-            kind: BreakKind::Micro,
         })
     );
 
@@ -56,7 +52,6 @@ fn test_fsm_progressive_warnings() {
         effect3,
         Some(UiEffect::NotifyPreBreak {
             minutes_left: 5,
-            kind: BreakKind::Micro,
         })
     );
 }
@@ -68,53 +63,27 @@ fn test_fsm_work_to_warning_and_break_transition() {
 
     // Run full 25 mins
     let effect = fsm.transition(Event::Tick(Duration::from_secs(25 * 60)));
-    assert_eq!(effect, Some(UiEffect::TriggerFinalWarning(BreakKind::Micro)));
-    assert!(matches!(fsm.state, State::BreakWarning { kind: BreakKind::Micro, seconds_remaining: 30 }));
+    assert_eq!(effect, Some(UiEffect::TriggerFinalWarning));
+    assert!(matches!(fsm.state, State::BreakWarning { seconds_remaining: 30 }));
 
     // Advance 30 seconds final warning
     let effect2 = fsm.transition(Event::Tick(Duration::from_secs(30)));
     assert_eq!(
         effect2,
         Some(UiEffect::MountOverlay {
-            kind: BreakKind::Micro,
-            total_duration: Duration::from_secs(20),
+            total_duration: Duration::from_secs(5 * 60),
         })
     );
-    assert!(matches!(fsm.state, State::InBreak { kind: BreakKind::Micro, .. }));
+    assert!(matches!(fsm.state, State::InBreak { .. }));
 
     // In break ticks: progress update
     let effect3 = fsm.transition(Event::Tick(Duration::from_secs(5)));
-    assert_eq!(effect3, Some(UiEffect::UpdateOverlayProgress { remaining_secs: 15 }));
+    assert_eq!(effect3, Some(UiEffect::UpdateOverlayProgress { remaining_secs: (5 * 60) - 5 }));
 
-    // Finish remaining 15 seconds
-    let effect4 = fsm.transition(Event::Tick(Duration::from_secs(15)));
+    // Finish remaining break
+    let effect4 = fsm.transition(Event::Tick(Duration::from_secs((5 * 60) - 5)));
     assert_eq!(effect4, Some(UiEffect::BreakComplete));
-    assert_eq!(fsm.completed_micro_breaks, 1);
     assert!(matches!(fsm.state, State::Working { elapsed, .. } if elapsed == Duration::ZERO));
-}
-
-#[test]
-fn test_fsm_macro_break_cycle() {
-    let cfg = test_config(); // micro_breaks_before_macro = 2
-    let mut fsm = FsmEngine::new(cfg);
-
-    // Complete 1st micro break
-    fsm.transition(Event::TriggerForcedBreak(BreakKind::Micro));
-    fsm.transition(Event::CompleteBreak);
-    assert_eq!(fsm.completed_micro_breaks, 1);
-    assert_eq!(fsm.next_break_kind(), BreakKind::Micro);
-
-    // Complete 2nd micro break
-    fsm.transition(Event::TriggerForcedBreak(BreakKind::Micro));
-    fsm.transition(Event::CompleteBreak);
-    assert_eq!(fsm.completed_micro_breaks, 2);
-    assert_eq!(fsm.next_break_kind(), BreakKind::Macro);
-
-    // Complete macro break -> resets counter to 0
-    fsm.transition(Event::TriggerForcedBreak(BreakKind::Macro));
-    fsm.transition(Event::CompleteBreak);
-    assert_eq!(fsm.completed_micro_breaks, 0);
-    assert_eq!(fsm.next_break_kind(), BreakKind::Micro);
 }
 
 #[test]
@@ -129,7 +98,7 @@ fn test_fsm_idle_and_auto_credit() {
     fsm.transition(Event::IdleThresholdTriggered);
     assert!(matches!(fsm.state, State::IdleMeasuring { .. }));
 
-    // User returns after 10s (before micro break duration 20s target is met)
+    // User returns after 10s (before break duration 5m target is met)
     fsm.transition(Event::ActivityDetected);
     match fsm.state {
         State::Working { elapsed, .. } => {
@@ -140,10 +109,9 @@ fn test_fsm_idle_and_auto_credit() {
 
     // User goes idle again
     fsm.transition(Event::IdleThresholdTriggered);
-    // Idle time surpasses target break duration (target break is 20s, initial idle is 180s, so >= 20s)
-    let effect = fsm.transition(Event::Tick(Duration::from_secs(1)));
+    // User is away for 5 mins (300s)
+    let effect = fsm.transition(Event::Tick(Duration::from_secs(300)));
     assert_eq!(effect, Some(UiEffect::AutoCreditResolved));
-    assert_eq!(fsm.completed_micro_breaks, 1);
     assert!(matches!(fsm.state, State::Working { elapsed, .. } if elapsed == Duration::ZERO));
 }
 
@@ -210,13 +178,8 @@ fn test_fsm_dynamic_duration_changes() {
         _ => panic!("Expected State::Working"),
     }
 
-    // Change micro-break to 45s
-    fsm.transition(Event::SetMicroBreakDuration(45));
-    assert_eq!(fsm.config.intervals.micro_break_seconds, 45);
-    assert_eq!(fsm.target_break_duration(BreakKind::Micro), Duration::from_secs(45));
-
-    // Change macro-break to 15m
-    fsm.transition(Event::SetMacroBreakDuration(15));
-    assert_eq!(fsm.config.intervals.macro_break_mins, 15);
-    assert_eq!(fsm.target_break_duration(BreakKind::Macro), Duration::from_secs(15 * 60));
+    // Change break to 10m
+    fsm.transition(Event::SetBreakDuration(10));
+    assert_eq!(fsm.config.intervals.break_duration_mins, 10);
+    assert_eq!(fsm.target_break_duration(), Duration::from_secs(10 * 60));
 }

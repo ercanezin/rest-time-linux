@@ -8,7 +8,7 @@ use tracing_subscriber::FmtSubscriber;
 use rest_time_linux::audio::AudioEngine;
 use rest_time_linux::config::Config;
 use rest_time_linux::engine::fsm::FsmEngine;
-use rest_time_linux::engine::types::{BreakKind, Event, State, UiEffect};
+use rest_time_linux::engine::types::{Event, State, UiEffect};
 use rest_time_linux::idle::dbus_detector::{ActivitySignal, IdleDetector};
 use rest_time_linux::idle::sleep_monitor::{SleepMonitor, SleepSignal};
 use rest_time_linux::notifications::NotificationEngine;
@@ -44,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ui_effect_tx, mut ui_effect_rx) = mpsc::channel::<UiEffect>(32);
 
     let is_snoozed = Arc::new(AtomicBool::new(false));
+    let is_in_break = Arc::new(AtomicBool::new(false));
 
     // 5. Spawn Idle Discovery Listener
     let idle_detector = IdleDetector::new(
@@ -57,9 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 7. Mount FreeDesktop StatusNotifier Tray
     let tray_service = ksni::TrayService::new(RestTimeTray {
-        display_text: format!("{}m", config.intervals.work_duration_mins),
+        display_text: format!("{:02}:00", config.intervals.work_duration_mins),
         tooltip_text: "Initializing...".into(),
         is_snoozed: is_snoozed.clone(),
+        is_in_break: is_in_break.clone(),
         tx: event_tx.clone(),
     });
     let tray_handle = tray_service.handle();
@@ -109,6 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut fsm = FsmEngine::new(config.clone());
     let audio_cfg = config.audio.clone();
     let is_snoozed_clone = is_snoozed.clone();
+    let is_in_break_clone = is_in_break.clone();
     let final_warn_secs = config.notifications.final_warning_seconds;
     let ui_tx = ui_effect_tx.clone();
 
@@ -116,48 +119,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(event) = event_rx.recv().await {
             let effect = fsm.transition(event);
 
-            // Sync Tray UI Status & Detailed Tooltips
+            // Sync Tray UI Status - Clean MM:SS on top bar next to icon
             match &fsm.state {
                 State::Working { elapsed, total } => {
                     is_snoozed_clone.store(false, Ordering::Relaxed);
+                    is_in_break_clone.store(false, Ordering::Relaxed);
                     let remaining = total.saturating_sub(*elapsed).as_secs();
-                    let total_secs = total.as_secs().max(1);
-                    let pct_left = ((remaining as f64 / total_secs as f64) * 100.0) as u32;
                     let formatted_rem = format!("{:02}:{:02}", remaining / 60, remaining % 60);
-                    let formatted_tot = format!("{:02}:{:02}", total_secs / 60, total_secs % 60);
-
-                    let next_str = match fsm.next_break_kind() {
-                        BreakKind::Micro => "Micro-Pause",
-                        BreakKind::Macro => "Macro-Break",
-                    };
-                    let cycle_info = format!(
-                        "Break {} of {}",
-                        fsm.completed_micro_breaks + 1,
-                        fsm.config.intervals.micro_breaks_before_macro + 1
-                    );
 
                     tray_handle.update(|tray: &mut RestTimeTray| {
                         tray.display_text = formatted_rem.clone();
-                        tray.tooltip_text = format!(
-                            "Focus: {} / {} ({}% left) • Next: {} ({})",
-                            formatted_rem, formatted_tot, pct_left, next_str, cycle_info
-                        );
+                        tray.tooltip_text = format!("Focus Time: {} remaining", formatted_rem);
                     });
                 }
-                State::IdleMeasuring { idle_elapsed, work_elapsed, target_break } => {
+                State::InBreak { elapsed, total } => {
+                    is_snoozed_clone.store(false, Ordering::Relaxed);
+                    is_in_break_clone.store(true, Ordering::Relaxed);
+                    let remaining = total.saturating_sub(*elapsed).as_secs();
+                    let formatted_rem = format!("{:02}:{:02}", remaining / 60, remaining % 60);
+
+                    tray_handle.update(|tray: &mut RestTimeTray| {
+                        tray.display_text = formatted_rem.clone();
+                        tray.tooltip_text = format!("Break Time: {} remaining", formatted_rem);
+                    });
+                }
+                State::IdleMeasuring { idle_elapsed, target_break, .. } => {
                     let idle_s = idle_elapsed.as_secs();
                     let target_s = target_break.as_secs();
-                    let work_rem = Duration::from_secs((fsm.config.intervals.work_duration_mins * 60) as u64)
-                        .saturating_sub(*work_elapsed).as_secs();
                     tray_handle.update(|tray: &mut RestTimeTray| {
                         tray.tooltip_text = format!(
-                            "Informal Break: {}s / {}s required to credit • Work paused at {:02}:{:02}",
-                            idle_s, target_s, work_rem / 60, work_rem % 60
+                            "Informal Break: {}s / {}s required to credit",
+                            idle_s, target_s
                         );
                     });
                 }
                 State::PausedSnooze { resume_at } => {
                     is_snoozed_clone.store(true, Ordering::Relaxed);
+                    is_in_break_clone.store(false, Ordering::Relaxed);
                     let remaining = resume_at.saturating_duration_since(std::time::Instant::now()).as_secs();
                     let hours = remaining / 3600;
                     let mins = (remaining % 3600) / 60;
@@ -171,29 +169,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     tray_handle.update(|tray: &mut RestTimeTray| {
                         tray.display_text = "PAUSED".into();
-                        tray.tooltip_text = format!("Snoozed: {} remaining (Auto-resumes)", time_str);
+                        tray.tooltip_text = format!("Paused: {} remaining (Auto-resumes)", time_str);
                     });
                 }
                 State::PausedManual => {
                     is_snoozed_clone.store(true, Ordering::Relaxed);
+                    is_in_break_clone.store(false, Ordering::Relaxed);
                     tray_handle.update(|tray: &mut RestTimeTray| {
                         tray.display_text = "PAUSED".into();
                         tray.tooltip_text = "Paused indefinitely (Click Resume Timer to start)".into();
-                    });
-                }
-                State::InBreak { kind, elapsed, total } => {
-                    let remaining = total.saturating_sub(*elapsed).as_secs();
-                    let total_s = total.as_secs().max(1);
-                    let kind_str = match kind {
-                        BreakKind::Micro => "Micro-Pause",
-                        BreakKind::Macro => "Rest Break",
-                    };
-                    tray_handle.update(|tray: &mut RestTimeTray| {
-                        tray.display_text = format!("{:02}:{:02}", remaining / 60, remaining % 60);
-                        tray.tooltip_text = format!(
-                            "{}: {:02}:{:02} / {:02}:{:02} remaining",
-                            kind_str, remaining / 60, remaining % 60, total_s / 60, total_s % 60
-                        );
                     });
                 }
                 _ => {}
@@ -202,10 +186,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Execute Side Effects
             if let Some(eff) = effect {
                 match &eff {
-                    UiEffect::NotifyPreBreak { minutes_left, kind } => {
-                        NotificationEngine::send_warning(*minutes_left, *kind);
+                    UiEffect::NotifyPreBreak { minutes_left } => {
+                        NotificationEngine::send_warning(*minutes_left);
                     }
-                    UiEffect::TriggerFinalWarning(_kind) => {
+                    UiEffect::TriggerFinalWarning => {
                         NotificationEngine::send_final_warning(final_warn_secs);
                     }
                     UiEffect::MountOverlay { .. } => {
@@ -234,9 +218,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     glib::MainContext::default().spawn_local(async move {
         while let Some(effect) = ui_effect_rx.recv().await {
             match effect {
-                UiEffect::MountOverlay { kind, total_duration } => {
+                UiEffect::MountOverlay { total_duration } => {
                     let tx = unlock_tx.clone();
-                    overlay_manager.spawn_overlays(kind, total_duration, move || {
+                    overlay_manager.spawn_overlays(total_duration, move || {
                         let tx = tx.clone();
                         tokio::spawn(async move {
                             let _ = tx.send(Event::SkipBreak).await;

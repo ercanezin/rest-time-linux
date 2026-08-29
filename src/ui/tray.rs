@@ -3,12 +3,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use crate::engine::types::{BreakKind, Event};
+use crate::engine::types::Event;
 
 pub struct RestTimeTray {
     pub display_text: String,
     pub tooltip_text: String,
     pub is_snoozed: Arc<AtomicBool>,
+    pub is_in_break: Arc<AtomicBool>,
     pub tx: mpsc::Sender<Event>,
 }
 
@@ -30,7 +31,9 @@ impl Tray for RestTimeTray {
     }
 
     fn icon_name(&self) -> String {
-        if self.is_snoozed.load(Ordering::Relaxed) {
+        if self.is_in_break.load(Ordering::Relaxed) {
+            "rest-time-break".into()
+        } else if self.is_snoozed.load(Ordering::Relaxed) {
             "rest-time-paused".into()
         } else {
             "rest-time-active".into()
@@ -49,8 +52,7 @@ impl Tray for RestTimeTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let is_paused = self.is_snoozed.load(Ordering::Relaxed);
 
-        // Helper macro/closure to create duration sender
-        let make_session_item = |mins: u32, label: &str| -> MenuItem<Self> {
+        let make_work_item = |mins: u32, label: &str| -> MenuItem<Self> {
             let tx = self.tx.clone();
             MenuItem::Standard(ksni::menu::StandardItem {
                 label: label.into(),
@@ -64,28 +66,14 @@ impl Tray for RestTimeTray {
             })
         };
 
-        let make_micro_item = |secs: u32, label: &str| -> MenuItem<Self> {
+        let make_break_item = |mins: u32, label: &str| -> MenuItem<Self> {
             let tx = self.tx.clone();
             MenuItem::Standard(ksni::menu::StandardItem {
                 label: label.into(),
                 activate: Box::new(move |_| {
                     let tx = tx.clone();
                     tokio::spawn(async move {
-                        let _ = tx.send(Event::SetMicroBreakDuration(secs)).await;
-                    });
-                }),
-                ..Default::default()
-            })
-        };
-
-        let make_macro_item = |mins: u32, label: &str| -> MenuItem<Self> {
-            let tx = self.tx.clone();
-            MenuItem::Standard(ksni::menu::StandardItem {
-                label: label.into(),
-                activate: Box::new(move |_| {
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let _ = tx.send(Event::SetMacroBreakDuration(mins)).await;
+                        let _ = tx.send(Event::SetBreakDuration(mins)).await;
                     });
                 }),
                 ..Default::default()
@@ -111,7 +99,7 @@ impl Tray for RestTimeTray {
 
         vec![
             MenuItem::Standard(ksni::menu::StandardItem {
-                label: format!("⏳ {}", self.tooltip_text),
+                label: format!("Status: {}", self.tooltip_text),
                 enabled: false,
                 ..Default::default()
             }),
@@ -121,59 +109,44 @@ impl Tray for RestTimeTray {
                 activate: Box::new(move |_| {
                     let tx = tx_break.clone();
                     tokio::spawn(async move {
-                        let _ = tx.send(Event::TriggerForcedBreak(BreakKind::Micro)).await;
+                        let _ = tx.send(Event::TriggerForcedBreak).await;
                     });
                 }),
                 ..Default::default()
             }),
             MenuItem::Separator,
-            // Session Length Submenu
+            // Work Duration Submenu
             MenuItem::SubMenu(ksni::menu::SubMenu {
-                label: "⏱ Set Session Length".into(),
+                label: "⏱ Set Work Duration".into(),
                 submenu: vec![
-                    make_session_item(10, "10 Minutes"),
-                    make_session_item(15, "15 Minutes"),
-                    make_session_item(20, "20 Minutes"),
-                    make_session_item(25, "25 Minutes (Standard Pomodoro)"),
-                    make_session_item(30, "30 Minutes"),
-                    make_session_item(45, "45 Minutes"),
-                    make_session_item(50, "50 Minutes (Ultradian Cycle)"),
-                    make_session_item(60, "60 Minutes (1 Hour)"),
-                    make_session_item(90, "90 Minutes (Deep Focus)"),
+                    make_work_item(10, "10 Minutes"),
+                    make_work_item(15, "15 Minutes"),
+                    make_work_item(20, "20 Minutes"),
+                    make_work_item(25, "25 Minutes (Standard)"),
+                    make_work_item(30, "30 Minutes"),
+                    make_work_item(45, "45 Minutes"),
+                    make_work_item(50, "50 Minutes"),
+                    make_work_item(60, "60 Minutes (1 Hour)"),
+                    make_work_item(90, "90 Minutes"),
                 ],
                 ..Default::default()
             }),
-            // Break Length Submenu
+            // Break Duration Submenu
             MenuItem::SubMenu(ksni::menu::SubMenu {
-                label: "☕ Set Break Lengths".into(),
+                label: "☕ Set Break Duration".into(),
                 submenu: vec![
-                    MenuItem::SubMenu(ksni::menu::SubMenu {
-                        label: "Micro-Pause Duration".into(),
-                        submenu: vec![
-                            make_micro_item(15, "15 Seconds"),
-                            make_micro_item(20, "20 Seconds (20-20-20 Rule)"),
-                            make_micro_item(30, "30 Seconds (Default)"),
-                            make_micro_item(45, "45 Seconds"),
-                            make_micro_item(60, "60 Seconds (1 Minute)"),
-                        ],
-                        ..Default::default()
-                    }),
-                    MenuItem::SubMenu(ksni::menu::SubMenu {
-                        label: "Macro-Break Duration".into(),
-                        submenu: vec![
-                            make_macro_item(3, "3 Minutes"),
-                            make_macro_item(5, "5 Minutes (Default)"),
-                            make_macro_item(10, "10 Minutes"),
-                            make_macro_item(15, "15 Minutes"),
-                            make_macro_item(20, "20 Minutes"),
-                            make_macro_item(30, "30 Minutes"),
-                        ],
-                        ..Default::default()
-                    }),
+                    make_break_item(1, "1 Minute"),
+                    make_break_item(2, "2 Minutes"),
+                    make_break_item(3, "3 Minutes"),
+                    make_break_item(5, "5 Minutes (Default)"),
+                    make_break_item(10, "10 Minutes"),
+                    make_break_item(15, "15 Minutes"),
+                    make_break_item(20, "20 Minutes"),
+                    make_break_item(30, "30 Minutes"),
                 ],
                 ..Default::default()
             }),
-            // Granular Pause & Snooze Submenu
+            // Pause / Snooze Submenu
             MenuItem::SubMenu(ksni::menu::SubMenu {
                 label: "⏸ Pause / Snooze Timer".into(),
                 submenu: vec![
