@@ -17,6 +17,10 @@ use rest_time_linux::ui::tray::RestTimeTray;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Force rock-solid Cairo rendering backend to avoid hybrid GPU driver crashes (Nvidia/AMD)
+    std::env::set_var("GSK_RENDERER", "cairo");
+    std::env::set_var("GDK_BACKEND", "wayland,x11");
+
     // 1. Initialize Log Pipeline
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
