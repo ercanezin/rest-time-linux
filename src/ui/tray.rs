@@ -31,15 +31,15 @@ impl Tray for RestTimeTray {
 
     fn icon_name(&self) -> String {
         if self.is_snoozed.load(Ordering::Relaxed) {
-            "media-playback-pause".into()
+            "rest-time-paused".into()
         } else {
-            "appointment-soon".into()
+            "rest-time-active".into()
         }
     }
 
     fn tool_tip(&self) -> ToolTip {
         ToolTip {
-            icon_name: "appointment-soon".into(),
+            icon_name: "rest-time-active".into(),
             icon_pixmap: Vec::new(),
             title: "Rest Time".into(),
             description: self.tooltip_text.clone(),
