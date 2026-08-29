@@ -20,12 +20,12 @@ const YOGA_IMAGES: &[&[u8]] = &[
     CHAIR_YOGA_5,
 ];
 
-const YOGA_DESCRIPTIONS: &[&str] = &[
-    "Seated Side Stretch — Gently reach overhead and lean sideways, breathing deeply.",
-    "Seated Forward Fold — Rest your chest towards your thighs and relax your neck.",
-    "Seated Figure Four — Cross your ankle over the opposite knee and lean forward gently.",
-    "Seated Spinal Twist — Sit tall, hold the back of your chair, and twist smoothly.",
-    "Chest & Shoulder Opener — Interlace your hands behind your back and open your chest.",
+const HEALTH_QUOTES: &[&str] = &[
+    "“Frequent micro-movements reset posture, restore circulation, and protect long-term spine vitality.”\n— Dr. Kelly Starrett",
+    "“Motion is lotion for your joints. Small daily stretches build strength and longevity.”\n— Dr. Stuart McGill",
+    "“Movement is medicine. Brief breaks restore mental clarity, circulation, and spinal health.”\n— Dr. Joan Vernikos, NASA Life Sciences",
+    "“Your best posture is your next posture. Move regularly to stay energized and pain-free.”\n— Prof. Alan Hedge, Cornell Ergonomics",
+    "“A few minutes of movement reverses hours of stiffness and builds lifelong mobility.”\n— Dr. James Levine, Mayo Clinic",
 ];
 
 pub struct BreakOverlayManager {
@@ -55,24 +55,19 @@ impl BreakOverlayManager {
             .break-surface {{
                 background-color: {};
             }}
-            .break-header {{
-                font-size: 28px;
-                font-weight: 800;
-                color: {};
-                margin-bottom: 2px;
-            }}
             .time-display {{
                 font-size: 64px;
                 font-weight: 800;
                 color: #FFFFFF;
                 font-family: 'JetBrains Mono', 'Fira Code', monospace;
-                margin-bottom: 4px;
+                margin-bottom: 6px;
             }}
-            .yoga-instructions {{
-                font-size: 17px;
+            .quote-display {{
+                font-size: 15px;
                 font-weight: 500;
-                color: {};
-                margin-bottom: 16px;
+                font-style: italic;
+                color: #94A3B8;
+                margin-bottom: 22px;
             }}
             .yoga-picture {{
                 border-radius: 18px;
@@ -80,8 +75,6 @@ impl BreakOverlayManager {
             }}
             ",
             cfg.ui.background_color,
-            cfg.ui.accent_color,
-            cfg.ui.text_color
         );
         provider.load_from_string(&css);
 
@@ -106,7 +99,7 @@ impl BreakOverlayManager {
         let mut active_wins = Vec::new();
         let mut labels = Vec::new();
 
-        // 🎲 Randomly pick a new yoga movement (guaranteeing different from previous)
+        // 🎲 Randomly pick a new yoga movement and inspiring quote (guaranteeing different from previous)
         let total_poses = YOGA_IMAGES.len();
         let chosen_idx = match self.last_yoga_index.get() {
             Some(prev) if total_poses > 1 => {
@@ -118,8 +111,7 @@ impl BreakOverlayManager {
         self.last_yoga_index.set(Some(chosen_idx));
 
         let yoga_data = YOGA_IMAGES[chosen_idx];
-        let pose_desc = YOGA_DESCRIPTIONS[chosen_idx];
-        let pose_num = chosen_idx + 1;
+        let quote = HEALTH_QUOTES[chosen_idx % HEALTH_QUOTES.len()];
 
         let layer_shell_supported = gtk4_layer_shell::is_supported();
         let n_monitors = monitors.n_items().max(1);
@@ -155,12 +147,6 @@ impl BreakOverlayManager {
             root.set_valign(gtk4::Align::Center);
             root.set_halign(gtk4::Align::Center);
 
-            let header_label = Label::builder()
-                .label(&format!("🧘 Chair Yoga — Movement {} of {}", pose_num, total_poses))
-                .css_classes(["break-header"])
-                .build();
-            root.append(&header_label);
-
             let total_secs = duration.as_secs();
             let timer_label = Label::builder()
                 .label(&format!("{:02}:{:02}", total_secs / 60, total_secs % 60))
@@ -169,19 +155,20 @@ impl BreakOverlayManager {
             labels.push(timer_label.clone());
             root.append(&timer_label);
 
-            let instruction_label = Label::builder()
-                .label(pose_desc)
-                .css_classes(["yoga-instructions"])
+            let quote_label = Label::builder()
+                .label(quote)
+                .justify(gtk4::Justification::Center)
+                .css_classes(["quote-display"])
                 .build();
-            root.append(&instruction_label);
+            root.append(&quote_label);
 
-            // Embedded Chair Yoga Image
+            // Embedded Chair Yoga Movement Image
             let bytes = glib::Bytes::from_static(yoga_data);
             let texture = gtk4::gdk::Texture::from_bytes(&bytes).expect("Failed to decode yoga image");
             let picture = Picture::for_paintable(&texture);
             picture.set_content_fit(gtk4::ContentFit::Contain);
             picture.set_can_shrink(true);
-            picture.set_size_request(440, 360);
+            picture.set_size_request(480, 400);
             picture.add_css_class("yoga-picture");
             root.append(&picture);
 
