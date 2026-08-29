@@ -72,7 +72,7 @@ impl Tray for RestTimeTray {
                 ..Default::default()
             }),
             MenuItem::SubMenu(ksni::menu::SubMenu {
-                label: "Snooze Countdown".into(),
+                label: "Snooze Reminders".into(),
                 submenu: vec![
                     MenuItem::Standard(ksni::menu::StandardItem {
                         label: "For 1 Hour".into(),

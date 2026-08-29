@@ -49,7 +49,7 @@ impl FsmEngine {
                 *elapsed += delta;
                 let remaining_secs = total.saturating_sub(*elapsed).as_secs();
 
-                // Progressive pre-warning logic
+                // 1. Progressive Pre-Warnings (10m, 5m, 3m)
                 if self.config.notifications.enable_progressive_warnings {
                     for warn_min in &self.config.notifications.warning_minutes {
                         let warn_secs = (*warn_min as u64) * 60;
@@ -63,7 +63,7 @@ impl FsmEngine {
                     }
                 }
 
-                // Final transition into break warning / overlay phase
+                // 2. Final countdown transition
                 if *elapsed >= *total {
                     self.sent_warnings.clear();
                     self.state = State::BreakWarning {
@@ -74,6 +74,7 @@ impl FsmEngine {
                 }
             }
 
+            // 3. User Idle Detection (Step away from desk)
             (State::Working { elapsed, .. }, Event::IdleThresholdTriggered) => {
                 info!("User idle detected. Transitioning to IdleMeasuring.");
                 self.state = State::IdleMeasuring {
@@ -83,6 +84,7 @@ impl FsmEngine {
                 };
             }
 
+            // 4. Auto-Credit Logic (Informal Breaks)
             (State::IdleMeasuring { idle_elapsed, target_break, .. }, Event::Tick(delta)) => {
                 *idle_elapsed += delta;
                 if self.config.behavior.auto_credit_informal_breaks && *idle_elapsed >= *target_break {
@@ -210,6 +212,7 @@ impl FsmEngine {
                 });
             }
 
+            // 5. Snooze Handling (1h, 2h, 12h)
             (_, Event::Snooze(duration)) => {
                 info!("Daemon snoozed for {:?}", duration);
                 self.sent_warnings.clear();
