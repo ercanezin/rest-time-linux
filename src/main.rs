@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use gtk4::prelude::*;
 use tokio::sync::mpsc;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -117,47 +116,84 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(event) = event_rx.recv().await {
             let effect = fsm.transition(event);
 
-            // Sync Tray UI Status
+            // Sync Tray UI Status & Detailed Tooltips
             match &fsm.state {
                 State::Working { elapsed, total } => {
                     is_snoozed_clone.store(false, Ordering::Relaxed);
                     let remaining = total.saturating_sub(*elapsed).as_secs();
-                    let formatted = format!("{:02}:{:02}", remaining / 60, remaining % 60);
+                    let total_secs = total.as_secs().max(1);
+                    let pct_left = ((remaining as f64 / total_secs as f64) * 100.0) as u32;
+                    let formatted_rem = format!("{:02}:{:02}", remaining / 60, remaining % 60);
+                    let formatted_tot = format!("{:02}:{:02}", total_secs / 60, total_secs % 60);
+
+                    let next_str = match fsm.next_break_kind() {
+                        BreakKind::Micro => "Micro-Pause",
+                        BreakKind::Macro => "Macro-Break",
+                    };
+                    let cycle_info = format!(
+                        "Break {} of {}",
+                        fsm.completed_micro_breaks + 1,
+                        fsm.config.intervals.micro_breaks_before_macro + 1
+                    );
+
                     tray_handle.update(|tray: &mut RestTimeTray| {
-                        tray.display_text = formatted.clone();
-                        tray.tooltip_text = format!("Focus Time: {} remaining", formatted);
+                        tray.display_text = formatted_rem.clone();
+                        tray.tooltip_text = format!(
+                            "Focus: {} / {} ({}% left) • Next: {} ({})",
+                            formatted_rem, formatted_tot, pct_left, next_str, cycle_info
+                        );
                     });
                 }
-                State::IdleMeasuring { idle_elapsed, .. } => {
-                    let secs = idle_elapsed.as_secs();
+                State::IdleMeasuring { idle_elapsed, work_elapsed, target_break } => {
+                    let idle_s = idle_elapsed.as_secs();
+                    let target_s = target_break.as_secs();
+                    let work_rem = Duration::from_secs((fsm.config.intervals.work_duration_mins * 60) as u64)
+                        .saturating_sub(*work_elapsed).as_secs();
                     tray_handle.update(|tray: &mut RestTimeTray| {
-                        tray.tooltip_text = format!("Informal Break: {}s", secs);
+                        tray.tooltip_text = format!(
+                            "Informal Break: {}s / {}s required to credit • Work paused at {:02}:{:02}",
+                            idle_s, target_s, work_rem / 60, work_rem % 60
+                        );
                     });
                 }
                 State::PausedSnooze { resume_at } => {
                     is_snoozed_clone.store(true, Ordering::Relaxed);
                     let remaining = resume_at.saturating_duration_since(std::time::Instant::now()).as_secs();
+                    let hours = remaining / 3600;
+                    let mins = (remaining % 3600) / 60;
+                    let secs = remaining % 60;
+                    let time_str = if hours > 0 {
+                        format!("{}h {}m", hours, mins)
+                    } else if mins > 0 {
+                        format!("{}m {}s", mins, secs)
+                    } else {
+                        format!("{}s", secs)
+                    };
                     tray_handle.update(|tray: &mut RestTimeTray| {
                         tray.display_text = "PAUSED".into();
-                        tray.tooltip_text = format!("Snoozed: {}m remaining", remaining / 60);
+                        tray.tooltip_text = format!("Snoozed: {} remaining (Auto-resumes)", time_str);
                     });
                 }
                 State::PausedManual => {
                     is_snoozed_clone.store(true, Ordering::Relaxed);
                     tray_handle.update(|tray: &mut RestTimeTray| {
                         tray.display_text = "PAUSED".into();
-                        tray.tooltip_text = "Paused Manually".into();
+                        tray.tooltip_text = "Paused indefinitely (Click Resume Timer to start)".into();
                     });
                 }
                 State::InBreak { kind, elapsed, total } => {
                     let remaining = total.saturating_sub(*elapsed).as_secs();
+                    let total_s = total.as_secs().max(1);
                     let kind_str = match kind {
                         BreakKind::Micro => "Micro-Pause",
                         BreakKind::Macro => "Rest Break",
                     };
                     tray_handle.update(|tray: &mut RestTimeTray| {
                         tray.display_text = format!("{:02}:{:02}", remaining / 60, remaining % 60);
-                        tray.tooltip_text = format!("{}: {} remaining", kind_str, tray.display_text);
+                        tray.tooltip_text = format!(
+                            "{}: {:02}:{:02} / {:02}:{:02} remaining",
+                            kind_str, remaining / 60, remaining % 60, total_s / 60, total_s % 60
+                        );
                     });
                 }
                 _ => {}

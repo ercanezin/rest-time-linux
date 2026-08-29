@@ -190,3 +190,33 @@ fn test_fsm_postpone_break() {
         _ => panic!("Expected State::Working"),
     }
 }
+
+#[test]
+fn test_fsm_dynamic_duration_changes() {
+    let cfg = test_config();
+    let mut fsm = FsmEngine::new(cfg);
+
+    // Initial total is 25m
+    match fsm.state {
+        State::Working { total, .. } => assert_eq!(total, Duration::from_secs(25 * 60)),
+        _ => panic!("Expected State::Working"),
+    }
+
+    // Change to 50m session
+    fsm.transition(Event::SetWorkDuration(50));
+    assert_eq!(fsm.config.intervals.work_duration_mins, 50);
+    match fsm.state {
+        State::Working { total, .. } => assert_eq!(total, Duration::from_secs(50 * 60)),
+        _ => panic!("Expected State::Working"),
+    }
+
+    // Change micro-break to 45s
+    fsm.transition(Event::SetMicroBreakDuration(45));
+    assert_eq!(fsm.config.intervals.micro_break_seconds, 45);
+    assert_eq!(fsm.target_break_duration(BreakKind::Micro), Duration::from_secs(45));
+
+    // Change macro-break to 15m
+    fsm.transition(Event::SetMacroBreakDuration(15));
+    assert_eq!(fsm.config.intervals.macro_break_mins, 15);
+    assert_eq!(fsm.target_break_duration(BreakKind::Macro), Duration::from_secs(15 * 60));
+}

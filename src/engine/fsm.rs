@@ -212,7 +212,33 @@ impl FsmEngine {
                 });
             }
 
-            // 5. Snooze Handling (1h, 2h, 12h)
+            // 5. Dynamic Configuration Updates
+            (_, Event::SetWorkDuration(mins)) => {
+                info!("Updating work session duration to {} mins", mins);
+                self.config.intervals.work_duration_mins = mins;
+                let _ = self.config.save();
+                let new_total = Duration::from_secs((mins * 60) as u64);
+                if let State::Working { elapsed, total } = &mut self.state {
+                    *total = new_total;
+                    if *elapsed > *total {
+                        *elapsed = *total;
+                    }
+                }
+            }
+
+            (_, Event::SetMicroBreakDuration(secs)) => {
+                info!("Updating micro-break duration to {} secs", secs);
+                self.config.intervals.micro_break_seconds = secs;
+                let _ = self.config.save();
+            }
+
+            (_, Event::SetMacroBreakDuration(mins)) => {
+                info!("Updating macro-break duration to {} mins", mins);
+                self.config.intervals.macro_break_mins = mins;
+                let _ = self.config.save();
+            }
+
+            // 6. Snooze Handling (5m up to 48h / indefinitely)
             (_, Event::Snooze(duration)) => {
                 info!("Daemon snoozed for {:?}", duration);
                 self.sent_warnings.clear();

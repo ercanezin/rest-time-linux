@@ -45,6 +45,9 @@ pub enum Event {
     SkipBreak,
     CompleteBreak,
     ToggleManualPause,
+    SetWorkDuration(u32),
+    SetMicroBreakDuration(u32),
+    SetMacroBreakDuration(u32),
     SystemSuspend,
     SystemResume,
 }

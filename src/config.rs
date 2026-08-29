@@ -112,6 +112,16 @@ impl Config {
         }
     }
 
+    pub fn save(&self) -> Result<()> {
+        let path = Self::get_config_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let serialized = toml::to_string_pretty(self)?;
+        fs::write(path, serialized)?;
+        Ok(())
+    }
+
     pub fn get_config_path() -> PathBuf {
         ProjectDirs::from("com", "github", "rest-time-linux")
             .map(|dirs| dirs.config_dir().join("config.toml"))
