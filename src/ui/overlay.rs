@@ -1,15 +1,30 @@
 use gtk4::prelude::*;
-use gtk4::{Application, Box, CssProvider, DrawingArea, GestureClick, Label, Orientation, Window};
+use gtk4::{Application, Box, CssProvider, DrawingArea, GestureClick, Label, Orientation, Picture, Window};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use crate::config::Config;
 
+const CHAIR_YOGA_1: &[u8] = include_bytes!("../../resources/chair_yoga/chair_yoga1.jpeg");
+const CHAIR_YOGA_2: &[u8] = include_bytes!("../../resources/chair_yoga/chair_yoga2.jpeg");
+const CHAIR_YOGA_3: &[u8] = include_bytes!("../../resources/chair_yoga/chair_yoga3.jpeg");
+const CHAIR_YOGA_4: &[u8] = include_bytes!("../../resources/chair_yoga/chair_yoga4.jpeg");
+const CHAIR_YOGA_5: &[u8] = include_bytes!("../../resources/chair_yoga/chair_yoga5.jpeg");
+
+const YOGA_IMAGES: &[&[u8]] = &[
+    CHAIR_YOGA_1,
+    CHAIR_YOGA_2,
+    CHAIR_YOGA_3,
+    CHAIR_YOGA_4,
+    CHAIR_YOGA_5,
+];
+
 pub struct BreakOverlayManager {
     windows: Rc<RefCell<Vec<Window>>>,
     app: Application,
     config: Config,
+    yoga_index: Cell<usize>,
 }
 
 impl BreakOverlayManager {
@@ -19,6 +34,7 @@ impl BreakOverlayManager {
             windows: Rc::new(RefCell::new(Vec::new())),
             app: app.clone(),
             config,
+            yoga_index: Cell::new(0),
         }
     }
 
@@ -29,18 +45,28 @@ impl BreakOverlayManager {
             .break-surface {{
                 background-color: {};
             }}
-            .time-display {{
-                font-size: 80px;
+            .break-header {{
+                font-size: 28px;
                 font-weight: 800;
                 color: {};
-                font-family: 'JetBrains Mono', 'Fira Code', monospace;
+                margin-bottom: 2px;
             }}
-            .prompt-display {{
-                font-size: 24px;
+            .time-display {{
+                font-size: 64px;
+                font-weight: 800;
+                color: #FFFFFF;
+                font-family: 'JetBrains Mono', 'Fira Code', monospace;
+                margin-bottom: 4px;
+            }}
+            .yoga-instructions {{
+                font-size: 17px;
                 font-weight: 500;
                 color: {};
-                margin-top: 16px;
-                margin-bottom: 36px;
+                margin-bottom: 16px;
+            }}
+            .yoga-picture {{
+                border-radius: 18px;
+                margin-bottom: 24px;
             }}
             ",
             cfg.ui.background_color,
@@ -69,7 +95,10 @@ impl BreakOverlayManager {
         let monitors = display.monitors();
         let mut active_wins = Vec::new();
 
-        let prompt = "Time for a break. Step away from your desk, stretch, and relax.";
+        let idx = self.yoga_index.get();
+        self.yoga_index.set((idx + 1) % YOGA_IMAGES.len());
+        let yoga_data = YOGA_IMAGES[idx];
+        let pose_num = idx + 1;
 
         let layer_shell_supported = gtk4_layer_shell::is_supported();
         let n_monitors = monitors.n_items().max(1);
@@ -105,6 +134,11 @@ impl BreakOverlayManager {
             root.set_valign(gtk4::Align::Center);
             root.set_halign(gtk4::Align::Center);
 
+            let header_label = Label::builder()
+                .label(&format!("🧘 Chair Yoga — Movement {} of {}", pose_num, YOGA_IMAGES.len()))
+                .css_classes(["break-header"])
+                .build();
+
             let secs = duration.as_secs();
             let time_label = Label::builder()
                 .label(&format!("{:02}:{:02}", secs / 60, secs % 60))
@@ -112,12 +146,24 @@ impl BreakOverlayManager {
                 .build();
 
             let prompt_label = Label::builder()
-                .label(prompt)
-                .css_classes(["prompt-display"])
+                .label("Follow this gentle movement to relieve tension, stretch, and refresh.")
+                .css_classes(["yoga-instructions"])
                 .build();
 
+            root.append(&header_label);
             root.append(&time_label);
             root.append(&prompt_label);
+
+            // Yoga Exercise Illustration
+            let bytes = glib::Bytes::from_static(yoga_data);
+            if let Ok(texture) = gtk4::gdk::Texture::from_bytes(&bytes) {
+                let picture = Picture::for_paintable(&texture);
+                picture.set_can_shrink(true);
+                picture.set_content_fit(gtk4::ContentFit::Contain);
+                picture.set_size_request(460, 460);
+                picture.add_css_class("yoga-picture");
+                root.append(&picture);
+            }
 
             // Hold to Unlock Guilt Barrier
             let hold_area = self.create_hold_button(on_unlock.clone());
@@ -235,8 +281,12 @@ impl BreakOverlayManager {
         let text = format!("{:02}:{:02}", remaining_secs / 60, remaining_secs % 60);
         for win in self.windows.borrow().iter() {
             if let Some(root) = win.child().and_downcast::<Box>() {
-                if let Some(label) = root.first_child().and_downcast::<Label>() {
-                    label.set_label(&text);
+                let child = root.first_child();
+                // 1st child is header, 2nd is time_label
+                if let Some(first) = child {
+                    if let Some(time_label) = first.next_sibling().and_downcast::<Label>() {
+                        time_label.set_label(&text);
+                    }
                 }
             }
         }
