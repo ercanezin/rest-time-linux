@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Rest Time
+GenericName=Ergonomic Break Reminder
+Comment=Small, elegant, and unobtrusive micro-pause manager for Linux
+Exec=rest-time-linux
+Icon=appointment-soon
+Terminal=false
+Type=Application
+Categories=Utility;Clock;Accessibility;
+Keywords=pomodoro;timer;break;rsi;health;ergonomics;
+StartupNotify=false

@@ -1,0 +1,63 @@
+[package]
+name = "rest-time-linux"
+version = "1.0.0"
+edition = "2021"
+authors = ["Autonomous Engineer"]
+description = "High-precision ergonomic break and micro-pause daemon for Linux/CachyOS"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/local/rest-time-linux"
+
+[lib]
+name = "rest_time_linux"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rest-time-linux"
+path = "src/main.rs"
+
+[dependencies]
+# Async Core & Scheduling
+tokio = { version = "1.40", features = ["full"] }
+async-channel = "2.3"
+futures-util = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Configuration & IO
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+directories = "5.0"
+thiserror = "1.0"
+
+# User Interface Primitives (Wayland Native)
+gtk4 = { version = "0.9", features = ["v4_12"] }
+gtk4-layer-shell = "0.4"
+cairo-rs = { version = "0.20", features = ["svg", "png"] }
+glib = "0.20"
+
+# System Tray (FreeDesktop StatusNotifierItem)
+ksni = "0.2"
+
+# D-Bus & OS Interoperability
+zbus = { version = "5.19", features = ["tokio", "async-io"] }
+notify-rust = { version = "4.11" }
+
+# Audio Engine
+rodio = { version = "0.19", default-features = false, features = ["vorbis"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Raw X11 Fallback Support
+x11rb = { version = "0.13", features = ["screensaver"] }
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

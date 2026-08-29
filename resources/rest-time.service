@@ -1,0 +1,17 @@
+[Unit]
+Description=Rest Time Linux Native Ergonomic Daemon
+Documentation=https://github.com/local/rest-time-linux
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rest-time-linux
+Restart=on-failure
+RestartSec=2
+Slice=app.slice
+MemoryHigh=50M
+MemoryMax=80M
+
+[Install]
+WantedBy=graphical-session.target
