@@ -419,6 +419,9 @@ pub struct TrayHandle {
     break_duration_mins: Arc<AtomicU32>,
     is_snoozed: Arc<AtomicBool>,
     is_in_break: Arc<AtomicBool>,
+    last_emitted_work_m: Arc<AtomicU32>,
+    last_emitted_break_m: Arc<AtomicU32>,
+    last_emitted_snoozed: Arc<AtomicBool>,
     conn: Arc<RwLock<Option<Connection>>>,
 }
 
@@ -445,7 +448,12 @@ impl TrayHandle {
         self.is_snoozed.store(snoozed, Ordering::Relaxed);
         self.is_in_break.store(in_break, Ordering::Relaxed);
 
-        // Notify D-Bus of changed properties and emit XAyatanaNewLabel & LayoutUpdated signal
+        let prev_work = self.last_emitted_work_m.swap(work_m, Ordering::Relaxed);
+        let prev_break = self.last_emitted_break_m.swap(break_m, Ordering::Relaxed);
+        let prev_snoozed = self.last_emitted_snoozed.swap(snoozed, Ordering::Relaxed);
+        let menu_structure_changed = prev_work != work_m || prev_break != break_m || prev_snoozed != snoozed;
+
+        // Notify D-Bus of changed properties and emit XAyatanaNewLabel signal
         if let Some(conn) = self.conn.read().unwrap().as_ref() {
             let conn = conn.clone();
             let display_str = display.to_string();
@@ -464,8 +472,11 @@ impl TrayHandle {
                     let _ = StatusNotifierItem::new_icon(&emitter).await;
                 }
 
-                if let Ok(menu_emitter) = SignalEmitter::new(&conn, "/MenuBar") {
-                    let _ = DBusMenuService::layout_updated(&menu_emitter, 1, 0).await;
+                // ONLY emit LayoutUpdated if menu settings actually changed (prevents closing open submenus on 1Hz tick!)
+                if menu_structure_changed {
+                    if let Ok(menu_emitter) = SignalEmitter::new(&conn, "/MenuBar") {
+                        let _ = DBusMenuService::layout_updated(&menu_emitter, 1, 0).await;
+                    }
                 }
 
                 let mut changed = HashMap::new();
@@ -497,6 +508,9 @@ impl NativeTrayServer {
         let break_duration_mins = Arc::new(AtomicU32::new(initial_break_mins));
         let is_snoozed = Arc::new(AtomicBool::new(false));
         let is_in_break = Arc::new(AtomicBool::new(false));
+        let last_emitted_work_m = Arc::new(AtomicU32::new(initial_work_mins));
+        let last_emitted_break_m = Arc::new(AtomicU32::new(initial_break_mins));
+        let last_emitted_snoozed = Arc::new(AtomicBool::new(false));
         let conn_holder = Arc::new(RwLock::new(None));
 
         let handle = TrayHandle {
@@ -506,6 +520,9 @@ impl NativeTrayServer {
             break_duration_mins: break_duration_mins.clone(),
             is_snoozed: is_snoozed.clone(),
             is_in_break: is_in_break.clone(),
+            last_emitted_work_m,
+            last_emitted_break_m,
+            last_emitted_snoozed,
             conn: conn_holder.clone(),
         };
 
