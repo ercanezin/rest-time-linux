@@ -33,6 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     gtk4::init()?;
     let app = gtk4::Application::builder()
         .application_id("com.github.rest_time_linux")
+        .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
     let overlay_manager = BreakOverlayManager::new(&app, config.clone());
@@ -217,7 +218,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 13. Run the Main Event Loop
-    app.run_with_args(&[""]);
+    // 13. Run the Persistent GLib Main Loop
+    let main_loop = glib::MainLoop::new(None, false);
+    main_loop.run();
     Ok(())
 }
