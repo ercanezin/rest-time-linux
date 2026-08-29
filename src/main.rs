@@ -1,3 +1,5 @@
+use std::fs::OpenOptions;
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,8 +17,45 @@ use rest_time_linux::notifications::NotificationEngine;
 use rest_time_linux::ui::overlay::BreakOverlayManager;
 use rest_time_linux::ui::tray::RestTimeTray;
 
+struct SingleInstanceLock {
+    _file: std::fs::File,
+}
+
+impl SingleInstanceLock {
+    fn acquire() -> Option<Self> {
+        let lock_path = std::env::var("XDG_RUNTIME_DIR")
+            .map(|r| std::path::PathBuf::from(r).join("rest-time-linux.lock"))
+            .unwrap_or_else(|_| std::env::temp_dir().join("rest-time-linux.lock"));
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .ok()?;
+
+        let fd = file.as_raw_fd();
+        let res = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if res == 0 {
+            Some(Self { _file: file })
+        } else {
+            None
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 0. Enforce strict single-instance execution
+    let _instance_lock = match SingleInstanceLock::acquire() {
+        Some(lock) => lock,
+        None => {
+            eprintln!("rest-time-linux is already running in your active session. Exiting second instance.");
+            return Ok(());
+        }
+    };
+
     // Force rock-solid Cairo rendering backend to avoid hybrid GPU driver crashes (Nvidia/AMD)
     std::env::set_var("GSK_RENDERER", "cairo");
     std::env::set_var("GDK_BACKEND", "wayland,x11");
@@ -36,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     gtk4::init()?;
     let app = gtk4::Application::builder()
         .application_id("com.github.rest_time_linux")
-        .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
+        .flags(gtk4::gio::ApplicationFlags::FLAGS_NONE)
         .build();
 
     let overlay_manager = BreakOverlayManager::new(&app, config.clone());
