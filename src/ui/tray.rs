@@ -1,9 +1,10 @@
-use ksni::{Category, MenuItem, Status, ToolTip, Tray};
+use ksni::{Category, Icon, MenuItem, Status, ToolTip, Tray};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use crate::engine::types::Event;
+use crate::ui::icon_renderer::render_timer_icon;
 
 pub struct RestTimeTray {
     pub display_text: String,
@@ -33,18 +34,19 @@ impl Tray for RestTimeTray {
     }
 
     fn icon_name(&self) -> String {
-        if self.is_in_break.load(Ordering::Relaxed) {
-            "rest-time-break".into()
-        } else if self.is_snoozed.load(Ordering::Relaxed) {
-            "rest-time-paused".into()
-        } else {
-            "rest-time-active".into()
-        }
+        // Return empty string so FreeDesktop/GNOME AppIndicator renders the dynamic IconPixmap
+        "".into()
+    }
+
+    fn icon_pixmap(&self) -> Vec<Icon> {
+        let is_break = self.is_in_break.load(Ordering::Relaxed);
+        let is_paused = self.is_snoozed.load(Ordering::Relaxed);
+        vec![render_timer_icon(&self.display_text, is_break, is_paused)]
     }
 
     fn tool_tip(&self) -> ToolTip {
         ToolTip {
-            icon_name: "rest-time-active".into(),
+            icon_name: "appointment-soon".into(),
             icon_pixmap: Vec::new(),
             title: "Rest Time".into(),
             description: self.tooltip_text.clone(),
