@@ -1,8 +1,10 @@
 use std::time::{Duration, Instant};
-use crate::config::Config;
-use crate::engine::types::{Event, State, UiEffect};
 use tracing::{debug, info};
 
+use crate::config::Config;
+use crate::engine::types::{Event, State, UiEffect};
+
+#[derive(Debug, Clone)]
 pub struct FsmEngine {
     pub state: State,
     pub config: Config,
@@ -28,73 +30,48 @@ impl FsmEngine {
 
     pub fn transition(&mut self, event: Event) -> Option<UiEffect> {
         let mut effect = None;
-        let target_break = self.target_break_duration();
 
         match (&mut self.state, event) {
+            // 1. Standard Working Progress
             (State::Working { elapsed, total }, Event::Tick(delta)) => {
                 *elapsed += delta;
+
                 let remaining_secs = total.saturating_sub(*elapsed).as_secs();
 
-                // 1. Progressive Pre-Warnings (10m, 5m, 3m)
+                // Progressive Pre-Break Notifications (e.g. at 10m, 5m, 3m)
                 if self.config.notifications.enable_progressive_warnings {
-                    for warn_min in &self.config.notifications.warning_minutes {
-                        let warn_secs = (*warn_min as u64) * 60;
-                        if remaining_secs == warn_secs && !self.sent_warnings.contains(warn_min) {
-                            self.sent_warnings.push(*warn_min);
+                    for &threshold in &self.config.notifications.warning_minutes {
+                        let threshold_secs = (threshold * 60) as u64;
+                        if remaining_secs <= threshold_secs && !self.sent_warnings.contains(&threshold) {
+                            self.sent_warnings.push(threshold);
                             effect = Some(UiEffect::NotifyPreBreak {
-                                minutes_left: *warn_min,
+                                minutes_left: threshold,
                             });
+                            break;
                         }
                     }
                 }
 
-                // 2. Final countdown transition
+                // Transition to Break Warning (Final countdown before overlay)
                 if *elapsed >= *total {
+                    let final_warn = self.config.notifications.final_warning_seconds;
+                    info!("Work session complete. Triggering final warning of {}s.", final_warn);
                     self.sent_warnings.clear();
                     self.state = State::BreakWarning {
-                        seconds_remaining: self.config.notifications.final_warning_seconds,
+                        seconds_remaining: final_warn,
                     };
                     effect = Some(UiEffect::TriggerFinalWarning);
                 }
             }
 
-            // 3. User Idle Detection (Step away from desk)
-            (State::Working { elapsed, .. }, Event::IdleThresholdTriggered) => {
-                info!("User idle detected. Transitioning to IdleMeasuring.");
-                self.state = State::IdleMeasuring {
-                    work_elapsed: *elapsed,
-                    idle_elapsed: Duration::from_secs(self.config.intervals.idle_threshold_seconds as u64),
-                    target_break,
-                };
-            }
-
-            // 4. Auto-Credit Logic (Informal Breaks)
-            (State::IdleMeasuring { idle_elapsed, target_break, .. }, Event::Tick(delta)) => {
-                *idle_elapsed += delta;
-                if self.config.behavior.auto_credit_informal_breaks && *idle_elapsed >= *target_break {
-                    info!("Informal break satisfied automatically. Resetting work session.");
-                    let total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
-                    self.state = State::Working {
-                        elapsed: Duration::ZERO,
-                        total,
-                    };
-                    effect = Some(UiEffect::AutoCreditResolved);
-                }
-            }
-
-            (State::IdleMeasuring { work_elapsed, .. }, Event::ActivityDetected) => {
-                info!("User returned before break duration met. Resuming working session.");
-                let total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
-                self.state = State::Working {
-                    elapsed: *work_elapsed,
-                    total,
-                };
-            }
-
+            // 1b. Break Warning State
             (State::BreakWarning { seconds_remaining }, Event::Tick(delta)) => {
                 let delta_secs = delta.as_secs() as u32;
-                if *seconds_remaining <= delta_secs {
+                *seconds_remaining = seconds_remaining.saturating_sub(delta_secs);
+
+                if *seconds_remaining == 0 {
                     let duration = self.target_break_duration();
+                    info!("Warning elapsed. Transitioning to break for {:?}", duration);
                     self.state = State::InBreak {
                         elapsed: Duration::ZERO,
                         total: duration,
@@ -102,25 +79,18 @@ impl FsmEngine {
                     effect = Some(UiEffect::MountOverlay {
                         total_duration: duration,
                     });
-                } else {
-                    *seconds_remaining -= delta_secs;
                 }
             }
 
-            (State::BreakWarning { .. }, Event::PostponeBreak(defer_by)) => {
-                let total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
-                let new_elapsed = total.saturating_sub(defer_by);
-                self.state = State::Working {
-                    elapsed: new_elapsed,
-                    total,
-                };
-                effect = Some(UiEffect::DismissOverlay);
-            }
-
+            // 2. Active Break Progress
             (State::InBreak { elapsed, total }, Event::Tick(delta)) => {
                 *elapsed += delta;
+                let remaining = total.saturating_sub(*elapsed).as_secs() as u32;
+
                 if *elapsed >= *total {
+                    info!("Break completed successfully. Resetting work timer.");
                     let work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
+                    self.sent_warnings.clear();
                     self.state = State::Working {
                         elapsed: Duration::ZERO,
                         total: work_total,
@@ -128,25 +98,96 @@ impl FsmEngine {
                     effect = Some(UiEffect::BreakComplete);
                 } else {
                     effect = Some(UiEffect::UpdateOverlayProgress {
-                        remaining_secs: total.saturating_sub(*elapsed).as_secs() as u32,
+                        remaining_secs: remaining,
                     });
                 }
             }
 
+            // 3. User Idle Discovery & Informal Break Auto-Crediting
+            (State::Working { elapsed, .. }, Event::IdleThresholdTriggered) => {
+                info!("User idle threshold passed. Measuring potential natural break.");
+                let current_elapsed = *elapsed;
+                let target_break = self.target_break_duration();
+
+                self.state = State::IdleMeasuring {
+                    work_elapsed: current_elapsed,
+                    idle_elapsed: Duration::from_secs(self.config.intervals.idle_threshold_seconds as u64),
+                    target_break,
+                };
+            }
+
+            (State::IdleMeasuring { idle_elapsed, target_break, .. }, Event::Tick(delta)) => {
+                *idle_elapsed += delta;
+                if *idle_elapsed >= *target_break {
+                    info!("User was idle for {:?}. Auto-crediting break and resetting work session.", idle_elapsed);
+                    let reset_work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
+                    self.sent_warnings.clear();
+                    self.state = State::Working {
+                        elapsed: Duration::ZERO,
+                        total: reset_work_total,
+                    };
+                    effect = Some(UiEffect::AutoCreditResolved);
+                }
+            }
+
+            (
+                State::IdleMeasuring {
+                    work_elapsed,
+                    idle_elapsed,
+                    target_break,
+                },
+                Event::ActivityDetected,
+            ) => {
+                if *idle_elapsed >= *target_break {
+                    info!("User resumed after {:?}. Auto-crediting break and resetting work session.", idle_elapsed);
+                    let reset_work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
+                    self.sent_warnings.clear();
+                    self.state = State::Working {
+                        elapsed: Duration::ZERO,
+                        total: reset_work_total,
+                    };
+                    effect = Some(UiEffect::AutoCreditResolved);
+                } else {
+                    info!("User resumed activity before reaching full break credit ({:?} < {:?}). Restoring work timer.", idle_elapsed, target_break);
+                    let work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
+                    self.state = State::Working {
+                        elapsed: *work_elapsed,
+                        total: work_total,
+                    };
+                }
+            }
+
+            // 4. User Interaction Overrides (Skip / Force Break / Postpone)
             (State::InBreak { .. }, Event::SkipBreak) => {
-                let work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
+                info!("User skipped/unlocked break manually.");
+                let total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
+                self.sent_warnings.clear();
                 self.state = State::Working {
                     elapsed: Duration::ZERO,
+                    total,
+                };
+                effect = Some(UiEffect::DismissOverlay);
+            }
+
+            (State::InBreak { .. } | State::BreakWarning { .. }, Event::PostponeBreak(duration)) => {
+                info!("User postponed break by {:?}", duration);
+                let work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
+                let remaining_work = work_total.saturating_sub(duration);
+                self.sent_warnings.clear();
+                self.state = State::Working {
+                    elapsed: remaining_work,
                     total: work_total,
                 };
                 effect = Some(UiEffect::DismissOverlay);
             }
 
             (State::InBreak { .. }, Event::CompleteBreak) => {
-                let work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
+                info!("Manual break completion acknowledged.");
+                let total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
+                self.sent_warnings.clear();
                 self.state = State::Working {
                     elapsed: Duration::ZERO,
-                    total: work_total,
+                    total,
                 };
                 effect = Some(UiEffect::BreakComplete);
             }
@@ -170,12 +211,12 @@ impl FsmEngine {
                 self.config.intervals.work_duration_mins = mins;
                 let _ = self.config.save();
                 let new_total = Duration::from_secs((mins * 60) as u64);
-                if let State::Working { elapsed, total } = &mut self.state {
-                    *total = new_total;
-                    if *elapsed > *total {
-                        *elapsed = *total;
-                    }
-                }
+                self.sent_warnings.clear();
+                self.state = State::Working {
+                    elapsed: Duration::ZERO,
+                    total: new_total,
+                };
+                effect = Some(UiEffect::DismissOverlay);
             }
 
             (_, Event::SetBreakDuration(mins)) => {
@@ -185,9 +226,7 @@ impl FsmEngine {
                 let new_break_total = Duration::from_secs((mins * 60) as u64);
                 if let State::InBreak { elapsed, total } = &mut self.state {
                     *total = new_break_total;
-                    if *elapsed > *total {
-                        *elapsed = *total;
-                    }
+                    *elapsed = Duration::ZERO;
                 }
             }
 
@@ -250,4 +289,3 @@ impl FsmEngine {
         effect
     }
 }
-

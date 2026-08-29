@@ -144,6 +144,105 @@ pub struct DBusMenuService {
     pub tx: mpsc::Sender<Event>,
 }
 
+impl DBusMenuService {
+    fn build_menu_definitions(&self) -> Vec<(i32, HashMap<String, Value<'static>>, Vec<Value<'static>>)> {
+        let is_paused = self.is_snoozed.load(Ordering::Relaxed);
+        let work_m = self.work_duration_mins.load(Ordering::Relaxed);
+        let break_m = self.break_duration_mins.load(Ordering::Relaxed);
+        let status_text = self.tooltip_text.read().unwrap().clone();
+
+        let make_leaf = |id: i32, label: &'static str| -> (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>) {
+            let mut props: HashMap<String, Value<'static>> = HashMap::new();
+            props.insert("label".to_string(), Value::from(label));
+            props.insert("enabled".to_string(), Value::from(true));
+            props.insert("visible".to_string(), Value::from(true));
+            (id, props, Vec::new())
+        };
+
+        let work_submenu: Vec<Value<'static>> = vec![
+            make_leaf(101, "10 Minutes"),
+            make_leaf(102, "15 Minutes"),
+            make_leaf(103, "20 Minutes"),
+            make_leaf(104, "25 Minutes (Standard)"),
+            make_leaf(105, "30 Minutes"),
+            make_leaf(106, "45 Minutes"),
+            make_leaf(107, "50 Minutes"),
+            make_leaf(108, "60 Minutes (1 Hour)"),
+            make_leaf(109, "90 Minutes"),
+        ].into_iter().map(Value::from).collect();
+
+        let break_submenu: Vec<Value<'static>> = vec![
+            make_leaf(201, "1 Minute"),
+            make_leaf(202, "2 Minutes"),
+            make_leaf(203, "3 Minutes"),
+            make_leaf(204, "5 Minutes (Default)"),
+            make_leaf(205, "10 Minutes"),
+            make_leaf(206, "15 Minutes"),
+            make_leaf(207, "20 Minutes"),
+            make_leaf(208, "30 Minutes"),
+        ].into_iter().map(Value::from).collect();
+
+        let pause_submenu: Vec<Value<'static>> = vec![
+            make_leaf(301, "For 5 Minutes"),
+            make_leaf(302, "For 10 Minutes"),
+            make_leaf(303, "For 15 Minutes"),
+            make_leaf(304, "For 20 Minutes"),
+            make_leaf(305, "For 30 Minutes"),
+            make_leaf(306, "For 45 Minutes"),
+            make_leaf(307, "For 1 Hour"),
+            make_leaf(308, "For 2 Hours"),
+            make_leaf(309, "For 3 Hours"),
+            make_leaf(310, "For 4 Hours"),
+            make_leaf(311, "For 6 Hours"),
+            make_leaf(312, "For 8 Hours"),
+            make_leaf(313, "For 10 Hours"),
+            make_leaf(314, "For 1 Day (24 Hours)"),
+            make_leaf(315, "For 2 Days (48 Hours)"),
+            make_leaf(316, "Indefinitely (Until I Resume)"),
+        ].into_iter().map(Value::from).collect();
+
+        let make_item = |id: i32, label: String, enabled: bool, is_submenu: bool, children: Vec<Value<'static>>| -> (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>) {
+            let mut props: HashMap<String, Value<'static>> = HashMap::new();
+            props.insert("label".to_string(), Value::from(label));
+            props.insert("enabled".to_string(), Value::from(enabled));
+            props.insert("visible".to_string(), Value::from(true));
+            if is_submenu {
+                props.insert("children-display".to_string(), Value::from("submenu"));
+            }
+            (id, props, children)
+        };
+
+        let make_sep = |id: i32| -> (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>) {
+            let mut props: HashMap<String, Value<'static>> = HashMap::new();
+            props.insert("type".to_string(), Value::from("separator"));
+            props.insert("visible".to_string(), Value::from(true));
+            (id, props, Vec::new())
+        };
+
+        let toggle_label = if is_paused {
+            "▶ Continue Monitoring".to_string()
+        } else {
+            "⏸ Pause Monitoring".to_string()
+        };
+
+        vec![
+            make_item(1, format!("Status: {}", status_text), false, false, Vec::new()),
+            make_item(2, format!("Work Duration: {} Min", work_m), false, false, Vec::new()),
+            make_item(3, format!("Break Duration: {} Min", break_m), false, false, Vec::new()),
+            make_sep(4),
+            make_item(10, "▶ Take Break Now".into(), true, false, Vec::new()),
+            make_sep(11),
+            make_item(100, "⏱ Set Work Duration".into(), true, true, work_submenu),
+            make_item(200, "☕ Set Break Duration".into(), true, true, break_submenu),
+            make_item(300, "⏸ Pause / Snooze Timer".into(), true, true, pause_submenu),
+            make_sep(12),
+            make_item(20, toggle_label, true, false, Vec::new()),
+            make_sep(21),
+            make_item(99, "Quit Rest Time".into(), true, false, Vec::new()),
+        ]
+    }
+}
+
 #[interface(name = "com.canonical.dbusmenu")]
 impl DBusMenuService {
     #[zbus(property)]
@@ -172,111 +271,66 @@ impl DBusMenuService {
         _recursion_depth: i32,
         _property_names: Vec<String>,
     ) -> (u32, (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>)) {
-        let is_paused = self.is_snoozed.load(Ordering::Relaxed);
-        let work_m = self.work_duration_mins.load(Ordering::Relaxed);
-        let break_m = self.break_duration_mins.load(Ordering::Relaxed);
-        let status_text = self.tooltip_text.read().unwrap().clone();
+        let root_children = self.build_menu_definitions();
 
-        let make_leaf = |id: i32, label: &'static str| -> Value<'static> {
-            let mut props: HashMap<String, Value<'static>> = HashMap::new();
-            props.insert("label".to_string(), Value::from(label));
-            props.insert("enabled".to_string(), Value::from(true));
-            props.insert("visible".to_string(), Value::from(true));
-            Value::from((id, props, Vec::<Value<'static>>::new()))
-        };
+        if parent_id == 0 {
+            let mut root_props: HashMap<String, Value<'static>> = HashMap::new();
+            root_props.insert("children-display".to_string(), Value::from("submenu"));
+            let children_val = root_children.into_iter().map(Value::from).collect();
+            (1, (0, root_props, children_val))
+        } else {
+            for (id, props, children) in root_children {
+                if id == parent_id {
+                    return (1, (id, props, children));
+                }
+            }
+            (1, (parent_id, HashMap::new(), Vec::new()))
+        }
+    }
 
-        if parent_id != 0 {
-            match parent_id {
-                100 => {
-                    let items = vec![
-                        make_leaf(101, "10 Minutes"),
-                        make_leaf(102, "15 Minutes"),
-                        make_leaf(103, "20 Minutes"),
-                        make_leaf(104, "25 Minutes (Standard)"),
-                        make_leaf(105, "30 Minutes"),
-                        make_leaf(106, "45 Minutes"),
-                        make_leaf(107, "50 Minutes"),
-                        make_leaf(108, "60 Minutes (1 Hour)"),
-                        make_leaf(109, "90 Minutes"),
-                    ];
-                    return (1, (parent_id, HashMap::new(), items));
+    fn get_group_properties(
+        &self,
+        ids: Vec<i32>,
+        _property_names: Vec<String>,
+    ) -> Vec<(i32, HashMap<String, Value<'static>>)> {
+        let mut result = Vec::new();
+        let root_children = self.build_menu_definitions();
+
+        let mut all_items: HashMap<i32, HashMap<String, Value<'static>>> = HashMap::new();
+
+        fn harvest(item: (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>), map: &mut HashMap<i32, HashMap<String, Value<'static>>>) {
+            let (id, props, children) = item;
+            map.insert(id, props);
+            for c in children {
+                if let Ok(tuple) = <(i32, HashMap<String, Value<'static>>, Vec<Value<'static>>)>::try_from(c) {
+                    harvest(tuple, map);
                 }
-                200 => {
-                    let items = vec![
-                        make_leaf(201, "1 Minute"),
-                        make_leaf(202, "2 Minutes"),
-                        make_leaf(203, "3 Minutes"),
-                        make_leaf(204, "5 Minutes (Default)"),
-                        make_leaf(205, "10 Minutes"),
-                        make_leaf(206, "15 Minutes"),
-                        make_leaf(207, "20 Minutes"),
-                        make_leaf(208, "30 Minutes"),
-                    ];
-                    return (1, (parent_id, HashMap::new(), items));
-                }
-                300 => {
-                    let items = vec![
-                        make_leaf(301, "For 5 Minutes"),
-                        make_leaf(302, "For 10 Minutes"),
-                        make_leaf(303, "For 15 Minutes"),
-                        make_leaf(304, "For 20 Minutes"),
-                        make_leaf(305, "For 30 Minutes"),
-                        make_leaf(306, "For 45 Minutes"),
-                        make_leaf(307, "For 1 Hour"),
-                        make_leaf(308, "For 2 Hours"),
-                        make_leaf(309, "For 3 Hours"),
-                        make_leaf(310, "For 4 Hours"),
-                        make_leaf(311, "For 6 Hours"),
-                        make_leaf(312, "For 8 Hours"),
-                        make_leaf(313, "For 10 Hours"),
-                        make_leaf(314, "For 1 Day (24 Hours)"),
-                        make_leaf(315, "For 2 Days (48 Hours)"),
-                        make_leaf(316, "Indefinitely (Until I Resume)"),
-                    ];
-                    return (1, (parent_id, HashMap::new(), items));
-                }
-                _ => return (1, (parent_id, HashMap::new(), Vec::new())),
             }
         }
 
-        // Root Menu Items
-        let make_item = |id: i32, label: String, enabled: bool, is_submenu: bool| -> Value<'static> {
-            let mut props: HashMap<String, Value<'static>> = HashMap::new();
-            props.insert("label".to_string(), Value::from(label));
-            props.insert("enabled".to_string(), Value::from(enabled));
-            props.insert("visible".to_string(), Value::from(true));
-            if is_submenu {
-                props.insert("children-display".to_string(), Value::from("submenu"));
+        for item in root_children {
+            harvest(item, &mut all_items);
+        }
+
+        for id in ids {
+            if let Some(props) = all_items.get(&id) {
+                result.push((id, props.clone()));
             }
-            Value::from((id, props, Vec::<Value<'static>>::new()))
-        };
+        }
 
-        let make_sep = |id: i32| -> Value<'static> {
-            let mut props: HashMap<String, Value<'static>> = HashMap::new();
-            props.insert("type".to_string(), Value::from("separator"));
-            props.insert("visible".to_string(), Value::from(true));
-            Value::from((id, props, Vec::<Value<'static>>::new()))
-        };
+        result
+    }
 
-        let children = vec![
-            make_item(1, format!("Status: {}", status_text), false, false),
-            make_item(2, format!("Work Duration: {} Min", work_m), false, false),
-            make_item(3, format!("Break Duration: {} Min", break_m), false, false),
-            make_sep(4),
-            make_item(10, "▶ Take Break Now".into(), true, false),
-            make_sep(11),
-            make_item(100, "⏱ Set Work Duration".into(), true, true),
-            make_item(200, "☕ Set Break Duration".into(), true, true),
-            make_item(300, "⏸ Pause / Snooze Timer".into(), true, true),
-            make_sep(12),
-            make_item(20, if is_paused { "▶ Resume Timer".into() } else { "⏸ Pause Monitoring".into() }, true, false),
-            make_sep(21),
-            make_item(99, "Quit Rest Time".into(), true, false),
-        ];
-
-        let mut root_props: HashMap<String, Value<'static>> = HashMap::new();
-        root_props.insert("children-display".to_string(), Value::from("submenu"));
-        (1, (0, root_props, children))
+    fn get_property(&self, id: i32, name: &str) -> Value<'static> {
+        let root_children = self.build_menu_definitions();
+        for (item_id, props, _) in root_children {
+            if item_id == id {
+                if let Some(v) = props.get(name) {
+                    return v.clone();
+                }
+            }
+        }
+        Value::from("")
     }
 
     fn event(&self, id: i32, event_id: &str, _data: Value<'_>, _timestamp: u32) {
@@ -334,9 +388,23 @@ impl DBusMenuService {
         }
     }
 
+    fn event_group(&self, events: Vec<(i32, String, Value<'_>, u32)>) -> Vec<i32> {
+        for (id, event_id, data, ts) in events {
+            self.event(id, &event_id, data, ts);
+        }
+        Vec::new()
+    }
+
     fn about_to_show(&self, _id: i32) -> bool {
         false
     }
+
+    fn about_to_show_group(&self, _ids: Vec<i32>) -> (Vec<i32>, Vec<i32>) {
+        (Vec::new(), Vec::new())
+    }
+
+    #[zbus(signal)]
+    pub async fn layout_updated(emitter: &SignalEmitter<'_>, revision: u32, parent: i32) -> zbus::Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -377,7 +445,7 @@ impl TrayHandle {
         self.is_snoozed.store(snoozed, Ordering::Relaxed);
         self.is_in_break.store(in_break, Ordering::Relaxed);
 
-        // Notify D-Bus of changed properties and emit XAyatanaNewLabel signal
+        // Notify D-Bus of changed properties and emit XAyatanaNewLabel & LayoutUpdated signal
         if let Some(conn) = self.conn.read().unwrap().as_ref() {
             let conn = conn.clone();
             let display_str = display.to_string();
@@ -394,6 +462,10 @@ impl TrayHandle {
                     let _ = StatusNotifierItem::x_ayatana_new_label(&emitter, &display_str, "00:00").await;
                     let _ = StatusNotifierItem::new_title(&emitter).await;
                     let _ = StatusNotifierItem::new_icon(&emitter).await;
+                }
+
+                if let Ok(menu_emitter) = SignalEmitter::new(&conn, "/MenuBar") {
+                    let _ = DBusMenuService::layout_updated(&menu_emitter, 1, 0).await;
                 }
 
                 let mut changed = HashMap::new();
