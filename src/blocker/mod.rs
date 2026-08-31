@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 use crate::config::Config;
 
 const EMBEDDED_MOTIVATIONAL_HTML: &str = include_str!("../../resources/index.html");
+static LAST_REDIRECT_TIME: AtomicU64 = AtomicU64::new(0);
 
 pub struct BlockerEngine {
     pub blocked_dir: PathBuf,
@@ -299,6 +300,26 @@ function FindProxyForURL(url, host) {{
         });
     }
 
+    fn redirect_to_motivational_page() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let last = LAST_REDIRECT_TIME.load(Ordering::Relaxed);
+        if now.saturating_sub(last) >= 5 {
+            LAST_REDIRECT_TIME.store(now, Ordering::Relaxed);
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/ee".into());
+            let html_path = std::path::PathBuf::from(home).join("blocked_sites").join("index.html");
+
+            tokio::task::spawn_blocking(move || {
+                let _ = std::process::Command::new("xdg-open")
+                    .arg(html_path)
+                    .spawn();
+            });
+        }
+    }
+
     async fn handle_client(mut socket: tokio::net::TcpStream, engine: Arc<Self>) {
         let mut buf = [0u8; 4096];
         let n = match socket.read(&mut buf).await {
@@ -318,10 +339,13 @@ function FindProxyForURL(url, host) {{
             );
             let _ = socket.write_all(resp.as_bytes()).await;
         } else if first_line.starts_with("CONNECT ") {
-            // Clean silent rejection of blocked HTTPS connection without loop or notification spam
+            Self::redirect_to_motivational_page();
+
             let resp = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = socket.write_all(resp.as_bytes()).await;
         } else {
+            Self::redirect_to_motivational_page();
+
             let html = engine.get_html_content();
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
