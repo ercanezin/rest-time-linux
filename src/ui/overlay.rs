@@ -28,6 +28,35 @@ const HEALTH_QUOTES: &[&str] = &[
     "“A few minutes of movement reverses hours of stiffness and builds lifelong mobility.”\n— Dr. James Levine, Mayo Clinic",
 ];
 
+fn detect_primary_connector() -> Option<String> {
+    let output = std::process::Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.Mutter.DisplayConfig",
+            "--object-path",
+            "/org/gnome/Mutter/DisplayConfig",
+            "--method",
+            "org.gnome.Mutter.DisplayConfig.GetCurrentState",
+        ])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(pos) = stdout.find("true, [('") {
+            let after = &stdout[pos + 9..];
+            if let Some(conn) = after.split('\'').next() {
+                if !conn.is_empty() {
+                    return Some(conn.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Clone)]
 pub struct BreakOverlayManager {
     windows: Rc<RefCell<Vec<Window>>>,
@@ -141,7 +170,24 @@ impl BreakOverlayManager {
         let layer_shell_supported = gtk4_layer_shell::is_supported();
         let n_monitors = monitors.n_items().max(1);
 
+        // 🔍 Detect primary monitor where GNOME top widget bar is located
+        let primary_connector = detect_primary_connector();
+        let mut primary_index = 0;
+        if let Some(ref target_conn) = primary_connector {
+            for i in 0..n_monitors {
+                if let Some(m) = monitors.item(i).and_downcast::<gtk4::gdk::Monitor>() {
+                    if let Some(conn) = m.connector() {
+                        if conn.as_str() == target_conn {
+                            primary_index = i;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         for i in 0..n_monitors {
+            let is_primary = i == primary_index;
             let monitor_opt = monitors.item(i).and_downcast::<gtk4::gdk::Monitor>();
 
             let win = Window::builder()
@@ -172,8 +218,9 @@ impl BreakOverlayManager {
                 }
             }
 
-            if i == 0 {
-                // MAIN MONITOR: Full interactive UI with Yoga movements, quote, countdown, postpone buttons & unlock
+            if is_primary {
+                // MAIN MONITOR (where top widget bar / GNOME primary display is):
+                // Full interactive UI with Yoga movements, quote, countdown, postpone buttons & unlock
                 let root = Box::new(Orientation::Vertical, 0);
                 root.set_valign(gtk4::Align::Center);
                 root.set_halign(gtk4::Align::Center);
