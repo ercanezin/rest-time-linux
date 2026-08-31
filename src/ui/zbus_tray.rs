@@ -224,6 +224,19 @@ impl DBusMenuService {
         let available_l = self.available_lists.read().unwrap().clone();
         let active_l = self.active_lists.read().unwrap().clone();
 
+        let format_list_label = |filename: &str| -> String {
+            match filename {
+                "light.txt" => "📗 Light (41k rules)".to_string(),
+                "normal.txt" => "📘 Normal (191k rules)".to_string(),
+                "pro.txt" => "📒 Pro (227k rules)".to_string(),
+                "pro_plus.txt" => "📙 Pro++ (251k rules)".to_string(),
+                "ultimate.txt" => "📕 Ultimate (278k rules)".to_string(),
+                "focus.txt" => "🎯 focus.txt (Custom)".to_string(),
+                "surfing.txt" => "🏄 surfing.txt (Custom)".to_string(),
+                other => format!("📝 {}", other),
+            }
+        };
+
         let mut blocker_items: Vec<Value<'static>> = Vec::new();
         let master_label = if blocker_active {
             "🛑 Website Blocker: ACTIVE (Click to Disable)"
@@ -242,7 +255,8 @@ impl DBusMenuService {
             for (idx, list_file) in available_l.iter().enumerate() {
                 let is_list_active = active_l.contains(list_file);
                 let checkmark = if is_list_active { "☑" } else { "☐" };
-                let label = format!("{} {}", checkmark, list_file);
+                let friendly_name = format_list_label(list_file);
+                let label = format!("{} {}", checkmark, friendly_name);
                 let item_id = 410 + (idx as i32);
                 blocker_items.push(Value::from(make_leaf_owned(item_id, label)));
             }
