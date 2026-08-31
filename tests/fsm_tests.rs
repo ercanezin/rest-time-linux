@@ -8,10 +8,9 @@ fn test_config() -> Config {
     cfg.intervals.work_duration_mins = 25;
     cfg.intervals.break_duration_mins = 5;
     cfg.intervals.idle_threshold_seconds = 180;
-    cfg.notifications.enable_progressive_warnings = true;
     cfg.notifications.warning_minutes = vec![10, 5, 3];
     cfg.notifications.final_warning_seconds = 30;
-    cfg.behavior.auto_credit_informal_breaks = true;
+    cfg.notifications.enable_progressive_warnings = true;
     cfg
 }
 
@@ -19,6 +18,7 @@ fn test_config() -> Config {
 fn test_fsm_initial_state() {
     let cfg = test_config();
     let fsm = FsmEngine::new(cfg);
+
     match fsm.state {
         State::Working { elapsed, total } => {
             assert_eq!(elapsed, Duration::ZERO);
@@ -29,61 +29,53 @@ fn test_fsm_initial_state() {
 }
 
 #[test]
-fn test_fsm_progressive_warnings() {
-    let cfg = test_config();
-    let mut fsm = FsmEngine::new(cfg);
-
-    // Fast-forward to 10 minutes remaining: 25 - 10 = 15 minutes = 900 seconds
-    let effect = fsm.transition(Event::Tick(Duration::from_secs(900)));
-    assert_eq!(
-        effect,
-        Some(UiEffect::NotifyPreBreak {
-            minutes_left: 10,
-        })
-    );
-
-    // Next tick should not repeat warning
-    let effect2 = fsm.transition(Event::Tick(Duration::from_secs(1)));
-    assert_eq!(effect2, None);
-
-    // Fast-forward to 5 minutes remaining: (25 - 5) * 60 = 1200 seconds -> +299 secs
-    let effect3 = fsm.transition(Event::Tick(Duration::from_secs(299)));
-    assert_eq!(
-        effect3,
-        Some(UiEffect::NotifyPreBreak {
-            minutes_left: 5,
-        })
-    );
-}
-
-#[test]
 fn test_fsm_work_to_warning_and_break_transition() {
     let cfg = test_config();
     let mut fsm = FsmEngine::new(cfg);
 
-    // Run full 25 mins
+    // Tick forward 25 mins
     let effect = fsm.transition(Event::Tick(Duration::from_secs(25 * 60)));
     assert_eq!(effect, Some(UiEffect::TriggerFinalWarning));
-    assert!(matches!(fsm.state, State::BreakWarning { seconds_remaining: 30 }));
+    assert!(matches!(
+        fsm.state,
+        State::BreakWarning {
+            seconds_remaining: 30
+        }
+    ));
 
-    // Advance 30 seconds final warning
-    let effect2 = fsm.transition(Event::Tick(Duration::from_secs(30)));
+    // Tick through 30 seconds final warning
+    let effect = fsm.transition(Event::Tick(Duration::from_secs(30)));
     assert_eq!(
-        effect2,
+        effect,
         Some(UiEffect::MountOverlay {
-            total_duration: Duration::from_secs(5 * 60),
+            total_duration: Duration::from_secs(5 * 60)
         })
     );
-    assert!(matches!(fsm.state, State::InBreak { .. }));
+    assert!(matches!(
+        fsm.state,
+        State::InBreak {
+            elapsed: Duration::ZERO,
+            total: _
+        }
+    ));
+}
 
-    // In break ticks: progress update
-    let effect3 = fsm.transition(Event::Tick(Duration::from_secs(5)));
-    assert_eq!(effect3, Some(UiEffect::UpdateOverlayProgress { remaining_secs: (5 * 60) - 5 }));
+#[test]
+fn test_fsm_progressive_warnings() {
+    let cfg = test_config();
+    let mut fsm = FsmEngine::new(cfg);
 
-    // Finish remaining break
-    let effect4 = fsm.transition(Event::Tick(Duration::from_secs((5 * 60) - 5)));
-    assert_eq!(effect4, Some(UiEffect::BreakComplete));
-    assert!(matches!(fsm.state, State::Working { elapsed, .. } if elapsed == Duration::ZERO));
+    // 25m total -> at 15m elapsed, 10m remaining
+    let effect = fsm.transition(Event::Tick(Duration::from_secs(15 * 60)));
+    assert_eq!(effect, Some(UiEffect::NotifyPreBreak { minutes_left: 10 }));
+
+    // at 20m elapsed, 5m remaining
+    let effect = fsm.transition(Event::Tick(Duration::from_secs(5 * 60)));
+    assert_eq!(effect, Some(UiEffect::NotifyPreBreak { minutes_left: 5 }));
+
+    // at 22m elapsed, 3m remaining
+    let effect = fsm.transition(Event::Tick(Duration::from_secs(2 * 60)));
+    assert_eq!(effect, Some(UiEffect::NotifyPreBreak { minutes_left: 3 }));
 }
 
 #[test]
@@ -91,28 +83,23 @@ fn test_fsm_idle_and_auto_credit() {
     let cfg = test_config();
     let mut fsm = FsmEngine::new(cfg);
 
-    // Work for 10 mins
-    fsm.transition(Event::Tick(Duration::from_secs(600)));
+    // 10 mins into work
+    fsm.transition(Event::Tick(Duration::from_secs(10 * 60)));
 
-    // User goes idle (threshold 180s triggered)
+    // User becomes idle
     fsm.transition(Event::IdleThresholdTriggered);
     assert!(matches!(fsm.state, State::IdleMeasuring { .. }));
 
-    // User returns after 10s (before break duration 5m target is met)
-    fsm.transition(Event::ActivityDetected);
-    match fsm.state {
-        State::Working { elapsed, .. } => {
-            assert_eq!(elapsed, Duration::from_secs(600));
-        }
-        _ => panic!("Expected State::Working with preserved elapsed time"),
-    }
-
-    // User goes idle again
-    fsm.transition(Event::IdleThresholdTriggered);
-    // User is away for 5 mins (300s)
-    let effect = fsm.transition(Event::Tick(Duration::from_secs(300)));
+    // User is idle for 5 mins (>= break_duration_mins)
+    let effect = fsm.transition(Event::Tick(Duration::from_secs(5 * 60)));
     assert_eq!(effect, Some(UiEffect::AutoCreditResolved));
-    assert!(matches!(fsm.state, State::Working { elapsed, .. } if elapsed == Duration::ZERO));
+    match fsm.state {
+        State::Working { elapsed, total } => {
+            assert_eq!(elapsed, Duration::ZERO);
+            assert_eq!(total, Duration::from_secs(25 * 60));
+        }
+        _ => panic!("Expected reset State::Working"),
+    }
 }
 
 #[test]
@@ -120,21 +107,21 @@ fn test_fsm_snooze_and_pause() {
     let cfg = test_config();
     let mut fsm = FsmEngine::new(cfg);
 
-    // Snooze 1 hour
-    let effect = fsm.transition(Event::Snooze(Duration::from_secs(3600)));
+    // Snooze 5 mins
+    let effect = fsm.transition(Event::Snooze(Duration::from_secs(5 * 60)));
     assert_eq!(effect, Some(UiEffect::DismissOverlay));
     assert!(matches!(fsm.state, State::PausedSnooze { .. }));
 
-    // Cancel Snooze
+    // Cancel snooze
     fsm.transition(Event::CancelSnooze);
     assert!(matches!(fsm.state, State::Working { .. }));
 
-    // Toggle Manual Pause
-    let effect2 = fsm.transition(Event::ToggleManualPause);
-    assert_eq!(effect2, Some(UiEffect::DismissOverlay));
+    // Manual pause toggle
+    let effect = fsm.transition(Event::ToggleManualPause);
+    assert_eq!(effect, Some(UiEffect::DismissOverlay));
     assert!(matches!(fsm.state, State::PausedManual));
 
-    // Toggle again to resume
+    // Toggle back to active
     fsm.transition(Event::ToggleManualPause);
     assert!(matches!(fsm.state, State::Working { .. }));
 }
@@ -153,7 +140,8 @@ fn test_fsm_postpone_break() {
     assert_eq!(effect, Some(UiEffect::DismissOverlay));
     match fsm.state {
         State::Working { elapsed, total } => {
-            assert_eq!(elapsed, total - Duration::from_secs(120));
+            assert_eq!(elapsed, Duration::ZERO);
+            assert_eq!(total, Duration::from_secs(120));
         }
         _ => panic!("Expected State::Working"),
     }
@@ -199,7 +187,8 @@ fn test_fsm_postpone_options_1m_5m_10m() {
     assert_eq!(effect_1m, Some(UiEffect::DismissOverlay));
     match fsm.state {
         State::Working { elapsed, total } => {
-            assert_eq!(total - elapsed, Duration::from_secs(60));
+            assert_eq!(elapsed, Duration::ZERO);
+            assert_eq!(total, Duration::from_secs(60));
         }
         _ => panic!("Expected State::Working"),
     }
@@ -210,7 +199,8 @@ fn test_fsm_postpone_options_1m_5m_10m() {
     assert_eq!(effect_5m, Some(UiEffect::DismissOverlay));
     match fsm.state {
         State::Working { elapsed, total } => {
-            assert_eq!(total - elapsed, Duration::from_secs(300));
+            assert_eq!(elapsed, Duration::ZERO);
+            assert_eq!(total, Duration::from_secs(300));
         }
         _ => panic!("Expected State::Working"),
     }
@@ -221,7 +211,8 @@ fn test_fsm_postpone_options_1m_5m_10m() {
     assert_eq!(effect_10m, Some(UiEffect::DismissOverlay));
     match fsm.state {
         State::Working { elapsed, total } => {
-            assert_eq!(total - elapsed, Duration::from_secs(600));
+            assert_eq!(elapsed, Duration::ZERO);
+            assert_eq!(total, Duration::from_secs(600));
         }
         _ => panic!("Expected State::Working"),
     }

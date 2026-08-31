@@ -170,13 +170,17 @@ impl FsmEngine {
             }
 
             (State::InBreak { .. } | State::BreakWarning { .. }, Event::PostponeBreak(duration)) => {
-                info!("User postponed break by {:?}", duration);
-                let work_total = Duration::from_secs((self.config.intervals.work_duration_mins * 60) as u64);
-                let remaining_work = work_total.saturating_sub(duration);
+                info!("User postponed break for mini-session of {:?}", duration);
                 self.sent_warnings.clear();
+                let dur_mins = (duration.as_secs() / 60) as u32;
+                for &threshold in &self.config.notifications.warning_minutes {
+                    if threshold >= dur_mins {
+                        self.sent_warnings.push(threshold);
+                    }
+                }
                 self.state = State::Working {
-                    elapsed: remaining_work,
-                    total: work_total,
+                    elapsed: Duration::ZERO,
+                    total: duration,
                 };
                 effect = Some(UiEffect::DismissOverlay);
             }
