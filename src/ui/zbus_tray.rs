@@ -445,7 +445,7 @@ impl DBusMenuService {
                 let _ = self.tx.try_send(Event::ToggleBlockerMaster);
             }
             404 => {
-                let _ = std::process::Command::new("xdg-open").arg("http://127.0.0.1:8765").spawn();
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/ee".into()); let html_path = std::path::PathBuf::from(home).join("blocked_sites").join("index.html"); let _ = std::process::Command::new("xdg-open").arg(html_path).spawn();
             }
             405 => {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/home/ee".into());

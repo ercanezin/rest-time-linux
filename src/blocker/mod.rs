@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -10,7 +10,6 @@ use tracing::{error, info, warn};
 use crate::config::Config;
 
 const EMBEDDED_MOTIVATIONAL_HTML: &str = include_str!("../../resources/index.html");
-static LAST_REDIRECT_TIME: AtomicU64 = AtomicU64::new(0);
 
 pub struct BlockerEngine {
     pub blocked_dir: PathBuf,
@@ -275,11 +274,11 @@ function FindProxyForURL(url, host) {{
         tokio::spawn(async move {
             let listener = match TcpListener::bind(&addr).await {
                 Ok(l) => {
-                    info!("Focus Website Blocker HTTP server listening on http://{}", addr);
+                    info!("Focus Website Blocker PAC service listening on http://{}", addr);
                     l
                 }
                 Err(e) => {
-                    error!("Failed to bind Blocker HTTP server to {}: {}", addr, e);
+                    error!("Failed to bind Blocker PAC server to {}: {}", addr, e);
                     return;
                 }
             };
@@ -298,31 +297,6 @@ function FindProxyForURL(url, host) {{
                 }
             }
         });
-    }
-
-    fn trigger_motivational_redirect(target_host: &str) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let last = LAST_REDIRECT_TIME.load(Ordering::Relaxed);
-        if now.saturating_sub(last) >= 2 {
-            LAST_REDIRECT_TIME.store(now, Ordering::Relaxed);
-            let host_clean = target_host.split(':').next().unwrap_or(target_host).to_string();
-            tokio::task::spawn_blocking(move || {
-                let _ = std::process::Command::new("xdg-open")
-                    .arg("http://127.0.0.1:8765")
-                    .spawn();
-
-                let _ = notify_rust::Notification::new()
-                    .summary(&format!("🛑 Blocked: {}", host_clean))
-                    .body("The only thing that is doing the thing is doing the thing. Go do the thing!")
-                    .icon("rest-time-active")
-                    .timeout(notify_rust::Timeout::Milliseconds(4000))
-                    .show();
-            });
-        }
     }
 
     async fn handle_client(mut socket: tokio::net::TcpStream, engine: Arc<Self>) {
@@ -344,15 +318,8 @@ function FindProxyForURL(url, host) {{
             );
             let _ = socket.write_all(resp.as_bytes()).await;
         } else if first_line.starts_with("CONNECT ") {
-            let target = first_line.split_whitespace().nth(1).unwrap_or("blocked site");
-            Self::trigger_motivational_redirect(target);
-
-            let html = engine.get_html_content();
-            let resp = format!(
-                "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                html.len(),
-                html
-            );
+            // Clean silent rejection of blocked HTTPS connection without loop or notification spam
+            let resp = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = socket.write_all(resp.as_bytes()).await;
         } else {
             let html = engine.get_html_content();
