@@ -150,9 +150,6 @@ pub struct DBusMenuService {
 impl DBusMenuService {
     fn build_menu_definitions(&self) -> Vec<(i32, HashMap<String, Value<'static>>, Vec<Value<'static>>)> {
         let is_paused = self.is_snoozed.load(Ordering::Relaxed);
-        let work_m = self.work_duration_mins.load(Ordering::Relaxed);
-        let break_m = self.break_duration_mins.load(Ordering::Relaxed);
-        let status_text = self.tooltip_text.read().unwrap().clone();
 
         let make_leaf = |id: i32, label: &'static str| -> (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>) {
             let mut props: HashMap<String, Value<'static>> = HashMap::new();
@@ -280,10 +277,6 @@ impl DBusMenuService {
         };
 
         vec![
-            make_item(1, format!("Status: {}", status_text), false, false, Vec::new()),
-            make_item(2, format!("Work Duration: {} Min", work_m), false, false, Vec::new()),
-            make_item(3, format!("Break Duration: {} Min", break_m), false, false, Vec::new()),
-            make_sep(4),
             make_item(10, "▶ Take Break Now".into(), true, false, Vec::new()),
             make_sep(11),
             make_item(100, "⏱ Set Work Duration".into(), true, true, work_submenu),
@@ -445,7 +438,9 @@ impl DBusMenuService {
                 let _ = self.tx.try_send(Event::ToggleBlockerMaster);
             }
             404 => {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/ee".into()); let html_path = std::path::PathBuf::from(home).join("blocked_sites").join("index.html"); let _ = std::process::Command::new("xdg-open").arg(html_path).spawn();
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/ee".into());
+                let html_path = std::path::PathBuf::from(home).join("blocked_sites").join("index.html");
+                let _ = std::process::Command::new("xdg-open").arg(html_path).spawn();
             }
             405 => {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/home/ee".into());
