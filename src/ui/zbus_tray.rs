@@ -232,6 +232,9 @@ impl DBusMenuService {
         };
         blocker_items.push(Value::from(make_leaf_owned(401, master_label.to_string())));
         blocker_items.push(Value::from(make_sep(402)));
+        blocker_items.push(Value::from(make_leaf(404, "🌐 View Motivational Page")));
+        blocker_items.push(Value::from(make_leaf(405, "📁 Open Block Lists Folder")));
+        blocker_items.push(Value::from(make_sep(406)));
 
         if available_l.is_empty() {
             blocker_items.push(Value::from(make_leaf(403, "(No .txt lists in ~/blocked_sites)")));
@@ -244,10 +247,6 @@ impl DBusMenuService {
                 blocker_items.push(Value::from(make_leaf_owned(item_id, label)));
             }
         }
-
-        blocker_items.push(Value::from(make_sep(450)));
-        blocker_items.push(Value::from(make_leaf(490, "🌐 View Motivational Page")));
-        blocker_items.push(Value::from(make_leaf(491, "📁 Open Block Lists Folder")));
 
         let make_item = |id: i32, label: String, enabled: bool, is_submenu: bool, children: Vec<Value<'static>>| -> (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>) {
             let mut props: HashMap<String, Value<'static>> = HashMap::new();
@@ -431,15 +430,15 @@ impl DBusMenuService {
             401 => {
                 let _ = self.tx.try_send(Event::ToggleBlockerMaster);
             }
-            490 => {
+            404 => {
                 let _ = std::process::Command::new("xdg-open").arg("http://127.0.0.1:8765").spawn();
             }
-            491 => {
+            405 => {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/home/ee".into());
                 let dir = std::path::PathBuf::from(home).join("blocked_sites");
                 let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
             }
-            id if (410..450).contains(&id) => {
+            id if (410..2000).contains(&id) => {
                 let idx = (id - 410) as usize;
                 let available = self.available_lists.read().unwrap().clone();
                 if let Some(list_name) = available.get(idx) {
