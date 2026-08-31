@@ -307,7 +307,7 @@ function FindProxyForURL(url, host) {{
             .as_secs();
 
         let last = LAST_REDIRECT_TIME.load(Ordering::Relaxed);
-        if now.saturating_sub(last) >= 5 {
+        if now.saturating_sub(last) >= 60 {
             LAST_REDIRECT_TIME.store(now, Ordering::Relaxed);
             let home = std::env::var("HOME").unwrap_or_else(|_| "/home/ee".into());
             let html_path = std::path::PathBuf::from(home).join("blocked_sites").join("index.html");
