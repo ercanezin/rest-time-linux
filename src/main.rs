@@ -180,7 +180,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let effect = fsm.transition(event);
 
-            let current_work_mins = fsm.config.intervals.work_duration_mins;
             let current_break_mins = fsm.config.intervals.break_duration_mins;
 
             // Sync Tray UI Status & XAyatanaLabel (GNOME Top Bar Text)
@@ -188,23 +187,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 State::Working { elapsed, total } => {
                     let remaining = total.saturating_sub(*elapsed).as_secs();
                     let formatted_rem = format!("{:02}:{:02}", remaining / 60, remaining % 60);
+                    let active_work_mins = ((total.as_secs() + 59) / 60) as u32;
                     let tooltip = format!("Focus Time: {} remaining", formatted_rem);
-                    tray_updater.update(&formatted_rem, &tooltip, current_work_mins, current_break_mins, false, false);
+                    tray_updater.update(&formatted_rem, &tooltip, active_work_mins, current_break_mins, false, false);
+                }
+                State::BreakWarning { seconds_remaining } => {
+                    let formatted_rem = format!("00:{:02}", seconds_remaining);
+                    let tooltip = format!("Break starting in {}s", seconds_remaining);
+                    let work_total_mins = fsm.config.intervals.work_duration_mins;
+                    tray_updater.update(&formatted_rem, &tooltip, work_total_mins, current_break_mins, false, false);
                 }
                 State::InBreak { elapsed, total } => {
                     let remaining = total.saturating_sub(*elapsed).as_secs();
                     let formatted_rem = format!("{:02}:{:02}", remaining / 60, remaining % 60);
+                    let work_total_mins = fsm.config.intervals.work_duration_mins;
                     let tooltip = format!("Break Time: {} remaining", formatted_rem);
-                    tray_updater.update(&formatted_rem, &tooltip, current_work_mins, current_break_mins, false, true);
+                    tray_updater.update(&formatted_rem, &tooltip, work_total_mins, current_break_mins, false, true);
                 }
                 State::IdleMeasuring { idle_elapsed, target_break, .. } => {
                     let idle_s = idle_elapsed.as_secs();
                     let target_s = target_break.as_secs();
+                    let work_total_mins = fsm.config.intervals.work_duration_mins;
                     let tooltip = format!(
                         "Informal Break: {}s / {}s required to credit",
                         idle_s, target_s
                     );
-                    tray_updater.update("IDLE", &tooltip, current_work_mins, current_break_mins, false, false);
+                    tray_updater.update("IDLE", &tooltip, work_total_mins, current_break_mins, false, false);
                 }
                 State::PausedSnooze { resume_at } => {
                     let remaining = resume_at.saturating_duration_since(std::time::Instant::now()).as_secs();
@@ -218,14 +226,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         format!("{}s", secs)
                     };
+                    let work_total_mins = fsm.config.intervals.work_duration_mins;
                     let tooltip = format!("Paused: {} remaining", time_str);
-                    tray_updater.update("PAUSED", &tooltip, current_work_mins, current_break_mins, true, false);
+                    tray_updater.update("PAUSED", &tooltip, work_total_mins, current_break_mins, true, false);
                 }
                 State::PausedManual => {
+                    let work_total_mins = fsm.config.intervals.work_duration_mins;
                     let tooltip = "Paused indefinitely (Click Resume Timer to start)".to_string();
-                    tray_updater.update("PAUSED", &tooltip, current_work_mins, current_break_mins, true, false);
+                    tray_updater.update("PAUSED", &tooltip, work_total_mins, current_break_mins, true, false);
                 }
-                _ => {}
             }
 
             // Execute Side Effects

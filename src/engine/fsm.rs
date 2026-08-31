@@ -30,6 +30,7 @@ impl FsmEngine {
 
     pub fn transition(&mut self, event: Event) -> Option<UiEffect> {
         let mut effect = None;
+        let break_duration = self.target_break_duration();
 
         match (&mut self.state, event) {
             // 1. Standard Working Progress
@@ -52,15 +53,27 @@ impl FsmEngine {
                     }
                 }
 
-                // Transition to Break Warning (Final countdown before overlay)
+                // Transition to Break Warning or Direct Break
                 if *elapsed >= *total {
                     let final_warn = self.config.notifications.final_warning_seconds;
-                    info!("Work session complete. Triggering final warning of {}s.", final_warn);
-                    self.sent_warnings.clear();
-                    self.state = State::BreakWarning {
-                        seconds_remaining: final_warn,
-                    };
-                    effect = Some(UiEffect::TriggerFinalWarning);
+                    if *total > Duration::from_secs(600) && final_warn > 0 {
+                        info!("Work session complete. Triggering final warning of {}s.", final_warn);
+                        self.sent_warnings.clear();
+                        self.state = State::BreakWarning {
+                            seconds_remaining: final_warn,
+                        };
+                        effect = Some(UiEffect::TriggerFinalWarning);
+                    } else {
+                        info!("Session complete ({:?} of {:?}). Transitioning to break for {:?}", elapsed, total, break_duration);
+                        self.sent_warnings.clear();
+                        self.state = State::InBreak {
+                            elapsed: Duration::ZERO,
+                            total: break_duration,
+                        };
+                        effect = Some(UiEffect::MountOverlay {
+                            total_duration: break_duration,
+                        });
+                    }
                 }
             }
 
@@ -70,14 +83,13 @@ impl FsmEngine {
                 *seconds_remaining = seconds_remaining.saturating_sub(delta_secs);
 
                 if *seconds_remaining == 0 {
-                    let duration = self.target_break_duration();
-                    info!("Warning elapsed. Transitioning to break for {:?}", duration);
+                    info!("Warning elapsed. Transitioning to break for {:?}", break_duration);
                     self.state = State::InBreak {
                         elapsed: Duration::ZERO,
-                        total: duration,
+                        total: break_duration,
                     };
                     effect = Some(UiEffect::MountOverlay {
-                        total_duration: duration,
+                        total_duration: break_duration,
                     });
                 }
             }
@@ -107,7 +119,7 @@ impl FsmEngine {
             (State::Working { elapsed, .. }, Event::IdleThresholdTriggered) => {
                 info!("User idle threshold passed. Measuring potential natural break.");
                 let current_elapsed = *elapsed;
-                let target_break = self.target_break_duration();
+                let target_break = break_duration;
 
                 self.state = State::IdleMeasuring {
                     work_elapsed: current_elapsed,
@@ -198,14 +210,13 @@ impl FsmEngine {
 
             (_, Event::TriggerForcedBreak) => {
                 info!("Manual break triggered");
-                let duration = self.target_break_duration();
                 self.sent_warnings.clear();
                 self.state = State::InBreak {
                     elapsed: Duration::ZERO,
-                    total: duration,
+                    total: break_duration,
                 };
                 effect = Some(UiEffect::MountOverlay {
-                    total_duration: duration,
+                    total_duration: break_duration,
                 });
             }
 
