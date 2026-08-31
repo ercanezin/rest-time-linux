@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Focus Mode — Do The Thing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,600;0,700;0,800;1,400;1,600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #07090E;
+            --card-bg: rgba(15, 23, 42, 0.75);
+            --card-border: rgba(255, 255, 255, 0.1);
+            --accent-cyan: #38BDF8;
+            --accent-glow: rgba(56, 189, 248, 0.25);
+            --text-primary: #F8FAFC;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+            --accent-red: #F43F5E;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 10% 20%, rgba(14, 165, 233, 0.12) 0px, transparent 50%),
+                radial-gradient(at 90% 80%, rgba(99, 102, 241, 0.12) 0px, transparent 50%);
+            color: var(--text-primary);
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px 16px;
+            overflow-x: hidden;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 780px;
+            background: var(--card-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--card-border);
+            border-radius: 28px;
+            padding: 44px 40px;
+            box-shadow: 
+                0 25px 50px -12px rgba(0, 0, 0, 0.5),
+                0 0 40px var(--accent-glow);
+            position: relative;
+            animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(18px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(56, 189, 248, 0.12);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            color: var(--accent-cyan);
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            padding: 6px 14px;
+            border-radius: 9999px;
+            margin-bottom: 24px;
+        }
+
+        .badge-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-cyan);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--accent-cyan);
+            animation: pulse 2s infinite ease-in-out;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.85); }
+        }
+
+        .header-title {
+            font-size: 26px;
+            font-weight: 800;
+            color: #FFFFFF;
+            letter-spacing: -0.02em;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .quote-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 32px;
+            border-left: 2px solid rgba(255, 255, 255, 0.08);
+            padding-left: 20px;
+        }
+
+        .quote-item {
+            font-size: 15px;
+            line-height: 1.5;
+            color: var(--text-secondary);
+            transition: color 0.2s ease, transform 0.2s ease;
+        }
+
+        .quote-item:hover {
+            color: #FFFFFF;
+            transform: translateX(4px);
+        }
+
+        .quote-item .negate {
+            color: #FDA4AF;
+            font-weight: 600;
+        }
+
+        .punchline-box {
+            background: linear-gradient(135deg, rgba(14, 165, 233, 0.15), rgba(99, 102, 241, 0.18));
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-radius: 20px;
+            padding: 26px 28px;
+            text-align: center;
+            margin-bottom: 28px;
+            box-shadow: 0 8px 30px rgba(14, 165, 233, 0.15);
+        }
+
+        .punchline-main {
+            font-size: 22px;
+            font-weight: 800;
+            color: #FFFFFF;
+            letter-spacing: -0.01em;
+            margin-bottom: 8px;
+            line-height: 1.35;
+        }
+
+        .punchline-cta {
+            font-size: 28px;
+            font-weight: 900;
+            background: linear-gradient(90deg, #38BDF8, #818CF8, #38BDF8);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            animation: shine 4s linear infinite;
+        }
+
+        @keyframes shine {
+            to { background-position: 200% center; }
+        }
+
+        .author {
+            display: block;
+            text-align: right;
+            font-size: 14px;
+            font-weight: 600;
+            font-style: italic;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+
+        .actions {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+        }
+
+        .btn-focus {
+            background: linear-gradient(135deg, #0284C7, #2563EB);
+            color: #FFFFFF;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 700;
+            padding: 12px 28px;
+            border-radius: 14px;
+            box-shadow: 0 4px 18px rgba(2, 132, 199, 0.4);
+            transition: all 0.2s ease;
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-focus:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px rgba(2, 132, 199, 0.6);
+            background: linear-gradient(135deg, #0369A1, #1D4ED8);
+        }
+
+        @media (max-width: 640px) {
+            .container {
+                padding: 28px 20px;
+                border-radius: 20px;
+            }
+            .header-title {
+                font-size: 22px;
+            }
+            .quote-item {
+                font-size: 14px;
+            }
+            .punchline-main {
+                font-size: 18px;
+            }
+            .punchline-cta {
+                font-size: 22px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="badge">
+            <span class="badge-dot"></span>
+            Focus Mode Active
+        </div>
+
+        <h1 class="header-title">
+            🛑 Website Access Blocked
+        </h1>
+
+        <ul class="quote-list">
+            <li class="quote-item">Preparing to do the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Scheduling time to do the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Making a to-do list for the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Telling people you're going to do the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Messaging friends who may or may not be doing the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Writing a banger tweet about how you're going to do the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Hating on yourself for not doing the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Hating on other people who have done the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Hating on the obstacles in the way of doing the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Fantasising about all of the adoration you'll receive once you do the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Reading about how to do the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Reading about how other people did the thing <span class="negate">isn't doing the thing.</span></li>
+            <li class="quote-item">Reading this essay <span class="negate">isn't doing the thing.</span></li>
+        </ul>
+
+        <div class="punchline-box">
+            <div class="punchline-main">
+                “The only thing that is doing the thing is doing the thing.”
+            </div>
+            <div class="punchline-cta">
+                Go Do The Thing.
+            </div>
+        </div>
+
+        <div class="author">
+            — Gareth Evans
+        </div>
+
+        <div class="actions">
+            <button class="btn-focus" onclick="window.history.back();">
+                ← Return to Focus
+            </button>
+        </div>
+    </div>
+</body>
+</html>

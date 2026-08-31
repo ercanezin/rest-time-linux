@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -141,6 +141,9 @@ pub struct DBusMenuService {
     pub work_duration_mins: Arc<AtomicU32>,
     pub break_duration_mins: Arc<AtomicU32>,
     pub is_snoozed: Arc<AtomicBool>,
+    pub is_blocker_enabled: Arc<AtomicBool>,
+    pub available_lists: Arc<RwLock<Vec<String>>>,
+    pub active_lists: Arc<RwLock<HashSet<String>>>,
     pub tx: mpsc::Sender<Event>,
 }
 
@@ -155,6 +158,21 @@ impl DBusMenuService {
             let mut props: HashMap<String, Value<'static>> = HashMap::new();
             props.insert("label".to_string(), Value::from(label));
             props.insert("enabled".to_string(), Value::from(true));
+            props.insert("visible".to_string(), Value::from(true));
+            (id, props, Vec::new())
+        };
+
+        let make_leaf_owned = |id: i32, label: String| -> (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>) {
+            let mut props: HashMap<String, Value<'static>> = HashMap::new();
+            props.insert("label".to_string(), Value::from(label));
+            props.insert("enabled".to_string(), Value::from(true));
+            props.insert("visible".to_string(), Value::from(true));
+            (id, props, Vec::new())
+        };
+
+        let make_sep = |id: i32| -> (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>) {
+            let mut props: HashMap<String, Value<'static>> = HashMap::new();
+            props.insert("type".to_string(), Value::from("separator"));
             props.insert("visible".to_string(), Value::from(true));
             (id, props, Vec::new())
         };
@@ -201,6 +219,36 @@ impl DBusMenuService {
             make_leaf(316, "Indefinitely (Until I Resume)"),
         ].into_iter().map(Value::from).collect();
 
+        // Focus Website Blocker Submenu
+        let blocker_active = self.is_blocker_enabled.load(Ordering::Relaxed);
+        let available_l = self.available_lists.read().unwrap().clone();
+        let active_l = self.active_lists.read().unwrap().clone();
+
+        let mut blocker_items: Vec<Value<'static>> = Vec::new();
+        let master_label = if blocker_active {
+            "🛑 Website Blocker: ACTIVE (Click to Disable)"
+        } else {
+            "🛡️ Website Blocker: OFF (Click to Enable)"
+        };
+        blocker_items.push(Value::from(make_leaf_owned(401, master_label.to_string())));
+        blocker_items.push(Value::from(make_sep(402)));
+
+        if available_l.is_empty() {
+            blocker_items.push(Value::from(make_leaf(403, "(No .txt lists in ~/blocked_sites)")));
+        } else {
+            for (idx, list_file) in available_l.iter().enumerate() {
+                let is_list_active = active_l.contains(list_file);
+                let checkmark = if is_list_active { "☑" } else { "☐" };
+                let label = format!("{} {}", checkmark, list_file);
+                let item_id = 410 + (idx as i32);
+                blocker_items.push(Value::from(make_leaf_owned(item_id, label)));
+            }
+        }
+
+        blocker_items.push(Value::from(make_sep(450)));
+        blocker_items.push(Value::from(make_leaf(490, "🌐 View Motivational Page")));
+        blocker_items.push(Value::from(make_leaf(491, "📁 Open Block Lists Folder")));
+
         let make_item = |id: i32, label: String, enabled: bool, is_submenu: bool, children: Vec<Value<'static>>| -> (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>) {
             let mut props: HashMap<String, Value<'static>> = HashMap::new();
             props.insert("label".to_string(), Value::from(label));
@@ -210,13 +258,6 @@ impl DBusMenuService {
                 props.insert("children-display".to_string(), Value::from("submenu"));
             }
             (id, props, children)
-        };
-
-        let make_sep = |id: i32| -> (i32, HashMap<String, Value<'static>>, Vec<Value<'static>>) {
-            let mut props: HashMap<String, Value<'static>> = HashMap::new();
-            props.insert("type".to_string(), Value::from("separator"));
-            props.insert("visible".to_string(), Value::from(true));
-            (id, props, Vec::new())
         };
 
         let toggle_label = if is_paused {
@@ -235,6 +276,7 @@ impl DBusMenuService {
             make_item(100, "⏱ Set Work Duration".into(), true, true, work_submenu),
             make_item(200, "☕ Set Break Duration".into(), true, true, break_submenu),
             make_item(300, "⏸ Pause / Snooze Timer".into(), true, true, pause_submenu),
+            make_item(400, "🛡️ Focus Website Blocker".into(), true, true, blocker_items),
             make_sep(12),
             make_item(20, toggle_label, true, false, Vec::new()),
             make_sep(21),
@@ -346,6 +388,7 @@ impl DBusMenuService {
                 let _ = self.tx.try_send(Event::ToggleManualPause);
             }
             99 => {
+                crate::blocker::BlockerEngine::disable_proxy_on_exit();
                 std::process::exit(0);
             }
             // Work duration options
@@ -384,6 +427,25 @@ impl DBusMenuService {
             314 => { let _ = self.tx.try_send(Event::Snooze(Duration::from_secs(86400))); }
             315 => { let _ = self.tx.try_send(Event::Snooze(Duration::from_secs(172800))); }
             316 => { let _ = self.tx.try_send(Event::ToggleManualPause); }
+            // Blocker options
+            401 => {
+                let _ = self.tx.try_send(Event::ToggleBlockerMaster);
+            }
+            490 => {
+                let _ = std::process::Command::new("xdg-open").arg("http://127.0.0.1:8765").spawn();
+            }
+            491 => {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/ee".into());
+                let dir = std::path::PathBuf::from(home).join("blocked_sites");
+                let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+            }
+            id if (410..450).contains(&id) => {
+                let idx = (id - 410) as usize;
+                let available = self.available_lists.read().unwrap().clone();
+                if let Some(list_name) = available.get(idx) {
+                    let _ = self.tx.try_send(Event::ToggleBlockList(list_name.clone()));
+                }
+            }
             _ => {}
         }
     }
@@ -419,9 +481,14 @@ pub struct TrayHandle {
     break_duration_mins: Arc<AtomicU32>,
     is_snoozed: Arc<AtomicBool>,
     is_in_break: Arc<AtomicBool>,
+    pub is_blocker_enabled: Arc<AtomicBool>,
+    pub available_lists: Arc<RwLock<Vec<String>>>,
+    pub active_lists: Arc<RwLock<HashSet<String>>>,
     last_emitted_work_m: Arc<AtomicU32>,
     last_emitted_break_m: Arc<AtomicU32>,
     last_emitted_snoozed: Arc<AtomicBool>,
+    last_emitted_blocker_enabled: Arc<AtomicBool>,
+    last_emitted_active_lists_len: Arc<AtomicU32>,
     conn: Arc<RwLock<Option<Connection>>>,
 }
 
@@ -448,10 +515,20 @@ impl TrayHandle {
         self.is_snoozed.store(snoozed, Ordering::Relaxed);
         self.is_in_break.store(in_break, Ordering::Relaxed);
 
+        let blocker_en = self.is_blocker_enabled.load(Ordering::Relaxed);
+        let active_count = self.active_lists.read().unwrap().len() as u32;
+
         let prev_work = self.last_emitted_work_m.swap(work_m, Ordering::Relaxed);
         let prev_break = self.last_emitted_break_m.swap(break_m, Ordering::Relaxed);
         let prev_snoozed = self.last_emitted_snoozed.swap(snoozed, Ordering::Relaxed);
-        let menu_structure_changed = prev_work != work_m || prev_break != break_m || prev_snoozed != snoozed;
+        let prev_blocker = self.last_emitted_blocker_enabled.swap(blocker_en, Ordering::Relaxed);
+        let prev_active_count = self.last_emitted_active_lists_len.swap(active_count, Ordering::Relaxed);
+
+        let menu_structure_changed = prev_work != work_m
+            || prev_break != break_m
+            || prev_snoozed != snoozed
+            || prev_blocker != blocker_en
+            || prev_active_count != active_count;
 
         // Notify D-Bus of changed properties and emit XAyatanaNewLabel signal
         if let Some(conn) = self.conn.read().unwrap().as_ref() {
@@ -472,7 +549,7 @@ impl TrayHandle {
                     let _ = StatusNotifierItem::new_icon(&emitter).await;
                 }
 
-                // ONLY emit LayoutUpdated if menu settings actually changed (prevents closing open submenus on 1Hz tick!)
+                // ONLY emit LayoutUpdated if menu settings actually changed
                 if menu_structure_changed {
                     if let Ok(menu_emitter) = SignalEmitter::new(&conn, "/MenuBar") {
                         let _ = DBusMenuService::layout_updated(&menu_emitter, 1, 0).await;
@@ -492,6 +569,17 @@ impl TrayHandle {
             });
         }
     }
+
+    pub fn trigger_menu_layout_update(&self) {
+        if let Some(conn) = self.conn.read().unwrap().as_ref() {
+            let conn = conn.clone();
+            tokio::spawn(async move {
+                if let Ok(menu_emitter) = SignalEmitter::new(&conn, "/MenuBar") {
+                    let _ = DBusMenuService::layout_updated(&menu_emitter, 1, 0).await;
+                }
+            });
+        }
+    }
 }
 
 pub struct NativeTrayServer;
@@ -500,6 +588,9 @@ impl NativeTrayServer {
     pub async fn spawn(
         initial_work_mins: u32,
         initial_break_mins: u32,
+        is_blocker_enabled: Arc<AtomicBool>,
+        available_lists: Arc<RwLock<Vec<String>>>,
+        active_lists: Arc<RwLock<HashSet<String>>>,
         tx: mpsc::Sender<Event>,
     ) -> Result<TrayHandle, Box<dyn std::error::Error>> {
         let display_text = Arc::new(RwLock::new(format!("{:02}:00", initial_work_mins)));
@@ -511,6 +602,8 @@ impl NativeTrayServer {
         let last_emitted_work_m = Arc::new(AtomicU32::new(initial_work_mins));
         let last_emitted_break_m = Arc::new(AtomicU32::new(initial_break_mins));
         let last_emitted_snoozed = Arc::new(AtomicBool::new(false));
+        let last_emitted_blocker_enabled = Arc::new(AtomicBool::new(is_blocker_enabled.load(Ordering::Relaxed)));
+        let last_emitted_active_lists_len = Arc::new(AtomicU32::new(active_lists.read().unwrap().len() as u32));
         let conn_holder = Arc::new(RwLock::new(None));
 
         let handle = TrayHandle {
@@ -520,9 +613,14 @@ impl NativeTrayServer {
             break_duration_mins: break_duration_mins.clone(),
             is_snoozed: is_snoozed.clone(),
             is_in_break: is_in_break.clone(),
+            is_blocker_enabled: is_blocker_enabled.clone(),
+            available_lists: available_lists.clone(),
+            active_lists: active_lists.clone(),
             last_emitted_work_m,
             last_emitted_break_m,
             last_emitted_snoozed,
+            last_emitted_blocker_enabled,
+            last_emitted_active_lists_len,
             conn: conn_holder.clone(),
         };
 
@@ -542,6 +640,9 @@ impl NativeTrayServer {
             work_duration_mins: work_duration_mins.clone(),
             break_duration_mins: break_duration_mins.clone(),
             is_snoozed: is_snoozed.clone(),
+            is_blocker_enabled,
+            available_lists,
+            active_lists,
             tx,
         };
 

@@ -11,6 +11,8 @@ pub struct Config {
     pub behavior: BehaviorSettings,
     pub ui: UiSettings,
     pub audio: AudioSettings,
+    #[serde(default)]
+    pub blocker: BlockerSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -51,6 +53,23 @@ pub struct AudioSettings {
     pub volume: f32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BlockerSettings {
+    pub enabled: bool,
+    pub active_lists: Vec<String>,
+    pub port: u16,
+}
+
+impl Default for BlockerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            active_lists: vec!["focus.txt".to_string()],
+            port: 8765,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -82,6 +101,7 @@ impl Default for Config {
                 sound_enabled: true,
                 volume: 0.75,
             },
+            blocker: BlockerSettings::default(),
         }
     }
 }
@@ -98,18 +118,18 @@ impl Config {
             let cfg: Config = toml::from_str(&data)?;
             Ok(cfg)
         } else {
-            let cfg = Config::default();
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let serialized = toml::to_string_pretty(&cfg)?;
-            fs::write(path, serialized)?;
-            Ok(cfg)
+            let default_cfg = Config::default();
+            default_cfg.save_to_path(path)?;
+            Ok(default_cfg)
         }
     }
 
     pub fn save(&self) -> Result<()> {
         let path = Self::get_config_path();
+        self.save_to_path(&path)
+    }
+
+    pub fn save_to_path(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -119,8 +139,10 @@ impl Config {
     }
 
     pub fn get_config_path() -> PathBuf {
-        ProjectDirs::from("com", "github", "rest-time-linux")
-            .map(|dirs| dirs.config_dir().join("config.toml"))
-            .unwrap_or_else(|| PathBuf::from("config.toml"))
+        if let Some(proj_dirs) = ProjectDirs::from("com", "github", "rest-time-linux") {
+            proj_dirs.config_dir().join("config.toml")
+        } else {
+            PathBuf::from("config.toml")
+        }
     }
 }

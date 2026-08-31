@@ -38,6 +38,9 @@ pub enum Event {
     ToggleManualPause,
     SetWorkDuration(u32),
     SetBreakDuration(u32),
+    ToggleBlockerMaster,
+    ToggleBlockList(String),
+    ReloadBlockerLists,
     SystemSuspend,
     SystemResume,
 }
@@ -51,4 +54,5 @@ pub enum UiEffect {
     DismissOverlay,
     BreakComplete,
     AutoCreditResolved,
+    BlockerStateChanged,
 }

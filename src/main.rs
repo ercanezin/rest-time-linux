@@ -1,11 +1,13 @@
 use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use rest_time_linux::audio::AudioEngine;
+use rest_time_linux::blocker::BlockerEngine;
 use rest_time_linux::config::Config;
 use rest_time_linux::engine::fsm::FsmEngine;
 use rest_time_linux::engine::types::{Event, State, UiEffect};
@@ -69,7 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Load Configuration File
     let config = Config::load_or_create()?;
 
-    // 3. Initialize GTK4 Core Context
+    // 3. Initialize Focus Website Blocker Engine
+    let blocker_engine = Arc::new(BlockerEngine::new(config.clone()));
+    blocker_engine.clone().spawn_server();
+
+    // 4. Initialize GTK4 Core Context
     gtk4::init()?;
     let app = gtk4::Application::builder()
         .application_id("com.github.rest_time_linux")
@@ -78,30 +84,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let overlay_manager = BreakOverlayManager::new(&app, config.clone());
 
-    // 4. Initialize Core Async Channels
+    // 5. Initialize Core Async Channels
     let (event_tx, mut event_rx) = mpsc::channel::<Event>(64);
     let (activity_tx, mut activity_rx) = mpsc::channel::<ActivitySignal>(16);
     let (sleep_tx, mut sleep_rx) = mpsc::channel::<SleepSignal>(16);
     let (ui_tx, ui_rx) = async_channel::unbounded::<UiEffect>();
 
-    // 5. Spawn Idle Discovery Listener
+    // 6. Spawn Idle Discovery Listener
     let idle_detector = IdleDetector::new(
         Duration::from_secs(config.intervals.idle_threshold_seconds as u64),
         activity_tx,
     );
     idle_detector.start().await;
 
-    // 6. Spawn Sleep/Wake Monitor
+    // 7. Spawn Sleep/Wake Monitor
     SleepMonitor::spawn(sleep_tx).await;
 
-    // 7. Mount Native FreeDesktop + GNOME StatusNotifier Tray with XAyatanaLabel
+    // 8. Mount Native FreeDesktop + GNOME StatusNotifier Tray with XAyatanaLabel & Blocker Submenu
     let tray_handle = NativeTrayServer::spawn(
         config.intervals.work_duration_mins,
         config.intervals.break_duration_mins,
+        blocker_engine.is_enabled.clone(),
+        blocker_engine.available_lists.clone(),
+        blocker_engine.active_lists.clone(),
         event_tx.clone(),
     ).await?;
 
-    // 8. Spawn High-Precision 1Hz Clock Loop
+    // 9. Spawn High-Precision 1Hz Clock Loop
     let ticker_tx = event_tx.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -111,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 9. Dispatch Activity Signals into Engine Events
+    // 10. Dispatch Activity Signals into Engine Events
     let bridge_tx = event_tx.clone();
     tokio::spawn(async move {
         while let Some(signal) = activity_rx.recv().await {
@@ -126,7 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 10. Dispatch Sleep Signals into Engine Events
+    // 11. Dispatch Sleep Signals into Engine Events
     let sleep_bridge_tx = event_tx.clone();
     tokio::spawn(async move {
         while let Some(signal) = sleep_rx.recv().await {
@@ -141,14 +150,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 11. Core Event Processing Loop in Tokio
+    // 12. Core Event Processing Loop in Tokio
     let mut fsm = FsmEngine::new(config.clone());
     let audio_cfg = config.audio.clone();
     let final_warn_secs = config.notifications.final_warning_seconds;
     let tray_updater = tray_handle.clone();
+    let blocker_ctrl = blocker_engine.clone();
 
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
+            // Handle Blocker Events directly
+            match &event {
+                Event::ToggleBlockerMaster => {
+                    let active = blocker_ctrl.toggle_master();
+                    info!("Website Blocker master state toggled: {}", active);
+                    tray_updater.trigger_menu_layout_update();
+                }
+                Event::ToggleBlockList(list_name) => {
+                    let active = blocker_ctrl.toggle_list(list_name);
+                    info!("Blocklist '{}' toggled: {}", list_name, active);
+                    tray_updater.trigger_menu_layout_update();
+                }
+                Event::ReloadBlockerLists => {
+                    blocker_ctrl.refresh_lists_and_patterns();
+                    tray_updater.trigger_menu_layout_update();
+                }
+                _ => {}
+            }
+
             let effect = fsm.transition(event);
 
             let current_work_mins = fsm.config.intervals.work_duration_mins;
@@ -229,7 +258,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 12. Main GLib Loop: Handle Overlay UI effects on the GTK main context
+    // 13. Main GLib Loop: Handle Overlay UI effects on the GTK main context
     let overlay_mgr = overlay_manager.clone();
     let unlock_tx = event_tx.clone();
 
@@ -260,8 +289,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 13. Run the Persistent GLib Main Loop
+    // 14. Run the Persistent GLib Main Loop
     let main_loop = glib::MainLoop::new(None, false);
     main_loop.run();
+
+    // 15. Ensure proxy is disabled on shutdown
+    BlockerEngine::disable_proxy_on_exit();
     Ok(())
 }
