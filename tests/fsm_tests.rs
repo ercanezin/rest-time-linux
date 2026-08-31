@@ -183,3 +183,46 @@ fn test_fsm_dynamic_duration_changes() {
     assert_eq!(fsm.config.intervals.break_duration_mins, 10);
     assert_eq!(fsm.target_break_duration(), Duration::from_secs(10 * 60));
 }
+
+#[test]
+fn test_fsm_postpone_options_1m_5m_10m() {
+    let cfg = test_config();
+    let mut fsm = FsmEngine::new(cfg);
+
+    // Force break into active overlay
+    let effect = fsm.transition(Event::TriggerForcedBreak);
+    assert!(matches!(effect, Some(UiEffect::MountOverlay { .. })));
+    assert!(matches!(fsm.state, State::InBreak { .. }));
+
+    // Test Postpone +1m (60s)
+    let effect_1m = fsm.transition(Event::PostponeBreak(Duration::from_secs(60)));
+    assert_eq!(effect_1m, Some(UiEffect::DismissOverlay));
+    match fsm.state {
+        State::Working { elapsed, total } => {
+            assert_eq!(total - elapsed, Duration::from_secs(60));
+        }
+        _ => panic!("Expected State::Working"),
+    }
+
+    // Force break again and test +5m (300s)
+    fsm.transition(Event::TriggerForcedBreak);
+    let effect_5m = fsm.transition(Event::PostponeBreak(Duration::from_secs(300)));
+    assert_eq!(effect_5m, Some(UiEffect::DismissOverlay));
+    match fsm.state {
+        State::Working { elapsed, total } => {
+            assert_eq!(total - elapsed, Duration::from_secs(300));
+        }
+        _ => panic!("Expected State::Working"),
+    }
+
+    // Force break again and test +10m (600s)
+    fsm.transition(Event::TriggerForcedBreak);
+    let effect_10m = fsm.transition(Event::PostponeBreak(Duration::from_secs(600)));
+    assert_eq!(effect_10m, Some(UiEffect::DismissOverlay));
+    match fsm.state {
+        State::Working { elapsed, total } => {
+            assert_eq!(total - elapsed, Duration::from_secs(600));
+        }
+        _ => panic!("Expected State::Working"),
+    }
+}

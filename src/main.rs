@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (event_tx, mut event_rx) = mpsc::channel::<Event>(64);
     let (activity_tx, mut activity_rx) = mpsc::channel::<ActivitySignal>(16);
     let (sleep_tx, mut sleep_rx) = mpsc::channel::<SleepSignal>(16);
-    let (ui_effect_tx, mut ui_effect_rx) = mpsc::channel::<UiEffect>(32);
+    let (ui_tx, ui_rx) = async_channel::unbounded::<UiEffect>();
 
     // 5. Spawn Idle Discovery Listener
     let idle_detector = IdleDetector::new(
@@ -145,7 +145,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut fsm = FsmEngine::new(config.clone());
     let audio_cfg = config.audio.clone();
     let final_warn_secs = config.notifications.final_warning_seconds;
-    let ui_tx = ui_effect_tx.clone();
     let tray_updater = tray_handle.clone();
 
     tokio::spawn(async move {
@@ -209,7 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     UiEffect::TriggerFinalWarning => {
                         NotificationEngine::send_final_warning(final_warn_secs);
                     }
-                    UiEffect::MountOverlay { total_duration } => {
+                    UiEffect::MountOverlay { .. } => {
                         if audio_cfg.sound_enabled {
                             AudioEngine::play_break_start(audio_cfg.volume);
                         }
@@ -230,22 +229,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 12. Main GLib Loop: Handle Overlay UI effects
+    // 12. Main GLib Loop: Handle Overlay UI effects on the GTK main context
+    let overlay_mgr = overlay_manager.clone();
     let unlock_tx = event_tx.clone();
+
     glib::MainContext::default().spawn_local(async move {
-        while let Some(effect) = ui_effect_rx.recv().await {
+        while let Ok(effect) = ui_rx.recv().await {
             match effect {
                 UiEffect::MountOverlay { total_duration } => {
                     let tx = unlock_tx.clone();
-                    overlay_manager.spawn_overlays(total_duration, move || {
-                        let _ = tx.try_send(Event::SkipBreak);
-                    });
+                    let tx_postpone = unlock_tx.clone();
+                    overlay_mgr.spawn_overlays(
+                        total_duration,
+                        move || {
+                            let _ = tx.try_send(Event::SkipBreak);
+                        },
+                        move |postpone_secs| {
+                            let _ = tx_postpone.try_send(Event::PostponeBreak(Duration::from_secs(postpone_secs)));
+                        },
+                    );
                 }
                 UiEffect::UpdateOverlayProgress { remaining_secs } => {
-                    overlay_manager.update_countdown(remaining_secs);
+                    overlay_mgr.update_countdown(remaining_secs);
                 }
                 UiEffect::DismissOverlay | UiEffect::BreakComplete => {
-                    overlay_manager.dismiss();
+                    overlay_mgr.dismiss();
                 }
                 _ => {}
             }
