@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 use crate::config::Config;
 
 const EMBEDDED_MOTIVATIONAL_HTML: &str = include_str!("../../resources/index.html");
+static LAST_REDIRECT_TIME: AtomicU64 = AtomicU64::new(0);
 
 pub struct BlockerEngine {
     pub blocked_dir: PathBuf,
@@ -203,7 +204,6 @@ impl BlockerEngine {
         }
         json_obj.push('}');
 
-        // Strict PROXY without DIRECT fallback so blocked domains cannot bypass
         format!(
             r#"var BLOCKED_DOMAINS = {domains_map};
 
@@ -300,6 +300,31 @@ function FindProxyForURL(url, host) {{
         });
     }
 
+    fn trigger_motivational_redirect(target_host: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let last = LAST_REDIRECT_TIME.load(Ordering::Relaxed);
+        if now.saturating_sub(last) >= 2 {
+            LAST_REDIRECT_TIME.store(now, Ordering::Relaxed);
+            let host_clean = target_host.split(':').next().unwrap_or(target_host).to_string();
+            tokio::task::spawn_blocking(move || {
+                let _ = std::process::Command::new("xdg-open")
+                    .arg("http://127.0.0.1:8765")
+                    .spawn();
+
+                let _ = notify_rust::Notification::new()
+                    .summary(&format!("🛑 Blocked: {}", host_clean))
+                    .body("The only thing that is doing the thing is doing the thing. Go do the thing!")
+                    .icon("rest-time-active")
+                    .timeout(notify_rust::Timeout::Milliseconds(4000))
+                    .show();
+            });
+        }
+    }
+
     async fn handle_client(mut socket: tokio::net::TcpStream, engine: Arc<Self>) {
         let mut buf = [0u8; 4096];
         let n = match socket.read(&mut buf).await {
@@ -319,9 +344,12 @@ function FindProxyForURL(url, host) {{
             );
             let _ = socket.write_all(resp.as_bytes()).await;
         } else if first_line.starts_with("CONNECT ") {
+            let target = first_line.split_whitespace().nth(1).unwrap_or("blocked site");
+            Self::trigger_motivational_redirect(target);
+
             let html = engine.get_html_content();
             let resp = format!(
-                "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:8765\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 html.len(),
                 html
             );
