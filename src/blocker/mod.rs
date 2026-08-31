@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
@@ -10,7 +10,9 @@ use tracing::{error, info, warn};
 use crate::config::Config;
 
 const EMBEDDED_MOTIVATIONAL_HTML: &str = include_str!("../../resources/index.html");
-static LAST_REDIRECT_TIME: AtomicU64 = AtomicU64::new(0);
+
+static LAST_REDIRECT_MAP: std::sync::LazyLock<Mutex<HashMap<String, u64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub struct BlockerEngine {
     pub blocked_dir: PathBuf,
@@ -300,15 +302,32 @@ function FindProxyForURL(url, host) {{
         });
     }
 
-    fn redirect_to_motivational_page() {
+    fn redirect_to_motivational_page(target_host: &str) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
-        let last = LAST_REDIRECT_TIME.load(Ordering::Relaxed);
-        if now.saturating_sub(last) >= 60 {
-            LAST_REDIRECT_TIME.store(now, Ordering::Relaxed);
+        let raw_host = target_host.split(':').next().unwrap_or(target_host).trim().to_lowercase();
+        let parts: Vec<&str> = raw_host.split('.').collect();
+        let root_domain = if parts.len() >= 2 {
+            format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1])
+        } else {
+            raw_host.clone()
+        };
+
+        let should_open = {
+            let mut map = LAST_REDIRECT_MAP.lock().unwrap();
+            let last = map.get(&root_domain).copied().unwrap_or(0);
+            if now.saturating_sub(last) >= 8 {
+                map.insert(root_domain, now);
+                true
+            } else {
+                false
+            }
+        };
+
+        if should_open {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/home/ee".into());
             let html_path = std::path::PathBuf::from(home).join("blocked_sites").join("index.html");
 
@@ -339,12 +358,14 @@ function FindProxyForURL(url, host) {{
             );
             let _ = socket.write_all(resp.as_bytes()).await;
         } else if first_line.starts_with("CONNECT ") {
-            Self::redirect_to_motivational_page();
+            let target = first_line.split_whitespace().nth(1).unwrap_or("blocked");
+            Self::redirect_to_motivational_page(target);
 
             let resp = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = socket.write_all(resp.as_bytes()).await;
         } else {
-            Self::redirect_to_motivational_page();
+            let target = first_line.split_whitespace().nth(1).unwrap_or("blocked");
+            Self::redirect_to_motivational_page(target);
 
             let html = engine.get_html_content();
             let resp = format!(
